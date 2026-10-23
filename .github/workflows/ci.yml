@@ -1,0 +1,51 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --bin subspace-toolkit -- -D warnings
+      - name: Tests without game files
+        run: cargo test --locked --bin subspace-toolkit
+      - name: Build Windows application
+        run: cargo build --locked --release --bin subspace-toolkit
+      - name: Package portable application
+        run: |
+          New-Item -ItemType Directory -Path dist/SubspaceToolkit/locales -Force | Out-Null
+          Copy-Item target/release/subspace-toolkit.exe dist/SubspaceToolkit/
+          Copy-Item locales/*.json dist/SubspaceToolkit/locales/
+          Copy-Item README.md dist/SubspaceToolkit/
+          $artifactHash = (Get-FileHash dist/SubspaceToolkit/subspace-toolkit.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$artifactHash  subspace-toolkit.exe" | Set-Content dist/SubspaceToolkit/SHA256SUMS.txt -Encoding utf8
+      - name: Upload portable application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SubspaceToolkit-windows-x64
+          path: dist/SubspaceToolkit/
+          if-no-files-found: error
+          retention-days: 14

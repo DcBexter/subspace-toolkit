@@ -1,0 +1,13 @@
+/target/
+/analysis/
+/dist/
+/gameassembly-identity.json
+/PLAN.md
+/PRODUCT.md
+/DESIGN.md
+/GLOSSARY.md
+*.subspace-original
+*.bundle
+*.dmp
+*.log
+.env

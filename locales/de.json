@@ -6,7 +6,6 @@
   "zoom_limit": "Zoomlimit",
   "zoom_description": "Maximaler Kameraabstand. Obergrenze: 1000.",
   "apply": "Für diese Sitzung anwenden",
-  "reset": "Originalwert wiederherstellen",
   "applied": "Zoomlimit gespeichert. Im Spiel mit Mausrad herauszoomen.",
   "restored": "Original-Zoomlimit wiederhergestellt. Im Spiel Mausrad bewegen.",
   "instructions": "Gespeichertes Limit wird bei Spielerkennung automatisch angewendet. Toolkit geöffnet lassen. Mausradgeschwindigkeit bleibt unverändert.",

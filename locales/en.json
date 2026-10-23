@@ -6,7 +6,6 @@
   "zoom_limit": "Zoom limit",
   "zoom_description": "Maximum camera distance. Upper limit: 1000.",
   "apply": "Apply for this session",
-  "reset": "Restore original",
   "applied": "Zoom limit saved. Use mouse wheel in game to zoom out.",
   "restored": "Original zoom limit restored. Move mouse wheel in game.",
   "instructions": "Saved limit applies automatically when game is detected. Keep toolkit running. Mouse-wheel speed stays unchanged.",

@@ -120,8 +120,8 @@ mod tests {
         let catalog = Catalog::load("fr-FR", Some(&directory));
         assert_eq!(catalog.text("apply"), "Appliquer");
         assert_eq!(
-            catalog.text("reset"),
-            Catalog::load("en", None).text("reset")
+            catalog.text("permanent_reset"),
+            Catalog::load("en", None).text("permanent_reset")
         );
         assert_eq!(
             catalog.format(

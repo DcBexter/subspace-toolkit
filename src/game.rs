@@ -21,15 +21,6 @@ impl From<&'static str> for GameError {
         Self { key, detail: None }
     }
 }
-impl std::fmt::Display for GameError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.key)?;
-        if let Some(detail) = &self.detail {
-            write!(f, ": {detail}")?;
-        }
-        Ok(())
-    }
-}
 use windows_sys::Win32::{
     Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE},
     System::{
@@ -140,7 +131,7 @@ fn wide_text(text: &[u16]) -> String {
     String::from_utf16_lossy(&text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())])
 }
 
-pub(crate) fn verified_hash(path: &Path, expected: &str) -> Result<(), GameError> {
+fn verified_hash(path: &Path, expected: &str) -> Result<(), GameError> {
     let mut file = File::open(path)
         .map_err(|e| GameError::detail("error.file_read", format!("{}: {e}", path.display())))?;
     let mut hash = Sha256::new();

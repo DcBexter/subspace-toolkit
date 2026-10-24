@@ -14,10 +14,14 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_READ, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 
-const MOD_0_1_0_SHA256: &str = "8fbb896501d13f50ac04a48274d560113cce0b948620fd45e959ae435b19b194";
+const KNOWN_MOD_SHA256: [&str; 3] = [
+    "8fbb896501d13f50ac04a48274d560113cce0b948620fd45e959ae435b19b194", // 0.1.0
+    "168ed88cf83537db558661d91b3a23bb8f94b5a06a3bfbe075c2494675a16d10", // 0.1.1
+    "b5c4ef805057b8a4a6f7800fcf1f94412f6b6abf9a5cee4602f089881ad76fb1", // tested overlap fix
+];
 
-fn published_mod(name: &str, hash: &str) -> bool {
-    name == "Mods/SubspaceToolkit.dll" && hash == MOD_0_1_0_SHA256
+fn known_mod(name: &str, hash: &str) -> bool {
+    name == "Mods/SubspaceToolkit.dll" && KNOWN_MOD_SHA256.contains(&hash)
 }
 
 fn move_without_replace(source: &Path, target: &Path) -> Result<(), GameError> {
@@ -41,8 +45,9 @@ fn move_without_replace(source: &Path, target: &Path) -> Result<(), GameError> {
     Ok(())
 }
 
-fn upgrade_published_mod(dir: &Path, target: &Path, data: &[u8]) -> Result<(), GameError> {
-    if digest(target)? != MOD_0_1_0_SHA256 {
+fn upgrade_known_mod(dir: &Path, target: &Path, data: &[u8]) -> Result<(), GameError> {
+    let original = digest(target)?;
+    if !known_mod("Mods/SubspaceToolkit.dll", &original) {
         return Err(GameError::detail(
             "error.payload_conflict",
             "Mods/SubspaceToolkit.dll",
@@ -52,15 +57,12 @@ fn upgrade_published_mod(dir: &Path, target: &Path, data: &[u8]) -> Result<(), G
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(io)?
         .as_nanos();
-    let backup = confined(
-        dir,
-        &format!("UserData/SubspaceToolkit-0.1.0-{stamp}.dll.bak"),
-    )?;
+    let backup = confined(dir, &format!("UserData/SubspaceToolkit-{stamp}.dll.bak"))?;
     fs::create_dir_all(backup.parent().ok_or("error.invalid_game_path")?).map_err(io)?;
     // Move first, then verify the captured file; concurrent changes cannot be overwritten.
     move_without_replace(target, &backup)?;
     let replace = (|| {
-        if digest(&backup)? != MOD_0_1_0_SHA256 {
+        if digest(&backup)? != original {
             return Err(GameError::detail(
                 "error.payload_conflict",
                 "Mods/SubspaceToolkit.dll",
@@ -354,7 +356,7 @@ fn install_payload(
             return Err("error.permanent_manifest".into());
         }
     }
-    // Never activate a partially copied loader; only our known published mod may be upgraded.
+    // Never activate a partially copied loader; only our known mod builds may be upgraded.
     files.sort_by_key(|(name, _, _, _)| *name == "version.dll");
     let mut pending = Vec::new();
     for (index, (name, expected, source, target)) in files.iter().enumerate() {
@@ -380,7 +382,7 @@ fn install_payload(
                 current == expected.to_ascii_lowercase()
             };
             if !matches {
-                if !published_mod(name, &current) {
+                if !known_mod(name, &current) {
                     return Err(GameError::detail("error.payload_conflict", name));
                 }
                 if !closed {
@@ -419,7 +421,7 @@ fn install_payload(
             return Err("error.payload_invalid".into());
         }
         if *upgrade {
-            upgrade_published_mod(dir, target, &data)?;
+            upgrade_known_mod(dir, target, &data)?;
         } else {
             atomic_create(target, &data).map_err(io)?;
         }
@@ -452,13 +454,15 @@ fn reset_settings(dir: Option<&Path>, preferences: &Path) -> Result<(), GameErro
 mod tests {
     use super::*;
     #[test]
-    fn published_mod_upgrade_policy_and_moves_preserve_foreign_files() {
-        assert!(published_mod("Mods/SubspaceToolkit.dll", MOD_0_1_0_SHA256));
-        assert!(!published_mod(
-            "MelonLoader/net6/Il2CppInterop.Runtime.dll",
-            MOD_0_1_0_SHA256
-        ));
-        assert!(!published_mod("Mods/SubspaceToolkit.dll", &"0".repeat(64)));
+    fn known_mod_upgrade_policy_and_moves_preserve_foreign_files() {
+        for hash in KNOWN_MOD_SHA256 {
+            assert!(known_mod("Mods/SubspaceToolkit.dll", hash));
+            assert!(!known_mod(
+                "MelonLoader/net6/Il2CppInterop.Runtime.dll",
+                hash
+            ));
+        }
+        assert!(!known_mod("Mods/SubspaceToolkit.dll", &"0".repeat(64)));
         let root = std::env::temp_dir().join(format!(
             "subspace-upgrade-policy-{}-{}",
             std::process::id(),
@@ -475,7 +479,7 @@ mod tests {
         assert!(move_without_replace(&source, &target).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"published candidate");
         assert_eq!(fs::read(&target).unwrap(), b"foreign");
-        assert!(upgrade_published_mod(&root, &target, b"replacement").is_err());
+        assert!(upgrade_known_mod(&root, &target, b"replacement").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"foreign");
         assert!(!root.join("UserData").exists());
         assert!(root.starts_with(std::env::temp_dir()));
@@ -484,17 +488,17 @@ mod tests {
 
     #[test]
     #[ignore = "requires SUBSPACE_TEST_PAYLOAD and SUBSPACE_TEST_OLD_MOD; temporary fixture only"]
-    fn published_0_1_0_mod_upgrades_only_closed_after_validation_and_keeps_backup() {
+    fn known_mod_upgrades_only_closed_after_validation_and_keeps_backup() {
         let payload = PathBuf::from(std::env::var_os("SUBSPACE_TEST_PAYLOAD").unwrap());
         let old_path = PathBuf::from(std::env::var_os("SUBSPACE_TEST_OLD_MOD").unwrap());
         let old = fs::read(&old_path).unwrap();
-        assert_eq!(
-            Sha256::digest(&old)
+        assert!(known_mod(
+            "Mods/SubspaceToolkit.dll",
+            &Sha256::digest(&old)
                 .iter()
                 .map(|b| format!("{b:02x}"))
-                .collect::<String>(),
-            MOD_0_1_0_SHA256
-        );
+                .collect::<String>()
+        ));
         let root = std::env::temp_dir().join(format!(
             "subspace-upgrade-{}-{}",
             std::process::id(),

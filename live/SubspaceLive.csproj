@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <AssemblyName>SubspaceLive</AssemblyName>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <LoaderDirectory Condition="'$(LoaderDirectory)' == ''">../dist/SubspaceToolkit/payload/MelonLoader/net6</LoaderDirectory>
   </PropertyGroup>
   <ItemGroup>

@@ -1,8 +1,27 @@
-use sha2::{Digest, Sha256};
+use crate::settings::Features;
+use crate::settings::atomic_write;
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 compile_error!("Subspace Toolkit requires 64-bit Windows.");
-use std::{fs::File, io::Read, mem::size_of, path::Path};
-
+use std::{
+    fs::{self, File},
+    io::Read,
+    mem::size_of,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE},
+    System::{
+        Diagnostics::ToolHelp::*,
+        Threading::{
+            CreateMutexW, GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
+    },
+};
+const GAME: &str = "StarTrekOutpostsUnknown.exe";
+pub const MAX_LIMIT: f32 = 1000.0;
+const STATUS_MAX_AGE_MS: u64 = 5000;
+const LEASE_MS: u64 = 3000;
 #[derive(Debug)]
 pub struct GameError {
     pub key: &'static str,
@@ -21,39 +40,9 @@ impl From<&'static str> for GameError {
         Self { key, detail: None }
     }
 }
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE},
-    System::{
-        Diagnostics::{
-            Debug::{ReadProcessMemory, WriteProcessMemory},
-            ToolHelp::*,
-        },
-        Threading::{
-            CreateMutexW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_OPERATION,
-            PROCESS_VM_READ, PROCESS_VM_WRITE,
-        },
-    },
-};
-
-const GAME: &str = "StarTrekOutpostsUnknown.exe";
-const ASSEMBLY_HASH: &str = "3f3cc9b0ffa2921dbe9e3c770aa6d79c9929522d57550f01a46112c46b6314fb";
-const METADATA_HASH: &str = "43812b70d4033f7cfd1366ec68549e1c84b8fc0b28c22c0f02859363219f1300";
-// Filled only from this build's independently inspected get_Instance implementation.
-const CAMERA_CLASS_RVA: usize = 0x88589b0;
-const STATIC_FIELDS: usize = 0xb8;
-const GET_INSTANCE_RVA: usize = 0x43801b0;
-const GET_INSTANCE_BYTES: [u8; 59] = [
-    0x48, 0x83, 0xec, 0x28, 0x80, 0x3d, 0xdf, 0xc7, 0x8c, 0x04, 0x00, 0x75, 0x18, 0x48, 0x8d, 0x0d,
-    0xec, 0x87, 0x4d, 0x04, 0xe8, 0x17, 0x96, 0x63, 0xfc, 0xf0, 0x83, 0x0c, 0x24, 0x00, 0xc6, 0x05,
-    0xc5, 0xc7, 0x8c, 0x04, 0x01, 0x48, 0x8b, 0x05, 0xd4, 0x87, 0x4d, 0x04, 0x48, 0x8b, 0x80, 0xb8,
-    0x00, 0x00, 0x00, 0x48, 0x8b, 0x00, 0x48, 0x83, 0xc4, 0x28, 0xc3,
-];
-const MINIMUM: usize = 0xb8;
-const MAXIMUM: usize = 0xbc;
-const CURRENT: usize = 0x1a4;
 
 pub(crate) struct Handle(HANDLE);
-// Windows process handles can be transferred between threads; ownership stays singular.
+// Windows handles transfer between threads; ownership stays singular.
 unsafe impl Send for Handle {}
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -73,92 +62,10 @@ impl Handle {
             Ok(Self(handle))
         }
     }
-    fn bytes<const N: usize>(&self, address: usize) -> Result<[u8; N], GameError> {
-        let mut value = [0; N];
-        let mut count = 0;
-        if unsafe {
-            ReadProcessMemory(
-                self.0,
-                address as _,
-                value.as_mut_ptr().cast(),
-                N,
-                &mut count,
-            )
-        } == 0
-            || count != N
-        {
-            return Err("error.game_access_lost".into());
-        }
-        Ok(value)
-    }
-    fn pointer(&self, address: usize) -> Result<usize, GameError> {
-        let value = usize::from_le_bytes(self.bytes(address)?);
-        if value != 0 && (!(0x10000..0x0000_8000_0000_0000).contains(&value) || value % 8 != 0) {
-            return Err("error.invalid_pointer".into());
-        }
-        Ok(value)
-    }
-    fn float(&self, address: usize) -> Result<f32, GameError> {
-        Ok(f32::from_le_bytes(self.bytes(address)?))
-    }
-    fn write_float(&self, address: usize, value: f32) -> Result<(), GameError> {
-        if !value.is_finite() || !address.is_multiple_of(4) {
-            return Err("error.invalid_camera_value".into());
-        }
-        let bytes = value.to_le_bytes();
-        let mut written = 0;
-        if unsafe {
-            WriteProcessMemory(
-                self.0,
-                address as _,
-                bytes.as_ptr().cast(),
-                bytes.len(),
-                &mut written,
-            )
-        } == 0
-            || written != bytes.len()
-        {
-            return Err("error.write_failed".into());
-        }
-        if self.float(address)? != value {
-            return Err("error.write_unconfirmed".into());
-        }
-        Ok(())
-    }
 }
-
 fn wide_text(text: &[u16]) -> String {
     String::from_utf16_lossy(&text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())])
 }
-
-fn verified_hash(path: &Path, expected: &str) -> Result<(), GameError> {
-    let mut file = File::open(path)
-        .map_err(|e| GameError::detail("error.file_read", format!("{}: {e}", path.display())))?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 65536];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|e| GameError::detail("error.file_read", e))?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    let actual: String = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if actual != expected {
-        return Err(GameError::detail(
-            "error.unsupported_build",
-            path.file_name().unwrap_or_default().to_string_lossy(),
-        ));
-    }
-    Ok(())
-}
-
 fn game_processes() -> Result<Vec<u32>, GameError> {
     let snapshot = Handle::new(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) })?;
     let mut entry = PROCESSENTRY32W {
@@ -184,9 +91,8 @@ pub(crate) fn ensure_game_closed() -> Result<(), GameError> {
     }
 }
 
-fn find_game() -> Result<(u32, usize, std::path::PathBuf), GameError> {
-    let found = game_processes()?;
-    let pid = match found.as_slice() {
+fn find_game() -> Result<(u32, PathBuf), GameError> {
+    let pid = match game_processes()?.as_slice() {
         [] => return Err("error.game_not_found".into()),
         [pid] => *pid,
         _ => return Err("error.multiple_games".into()),
@@ -200,11 +106,12 @@ fn find_game() -> Result<(u32, usize, std::path::PathBuf), GameError> {
     };
     let mut valid = unsafe { Module32FirstW(modules.0, &mut module) } != 0;
     while valid {
-        if wide_text(&module.szModule).eq_ignore_ascii_case("GameAssembly.dll") {
+        if wide_text(&module.szModule).eq_ignore_ascii_case(GAME) {
+            let exe = PathBuf::from(wide_text(&module.szExePath));
             return Ok((
                 pid,
-                module.modBaseAddr as usize,
-                wide_text(&module.szExePath).into(),
+                fs::canonicalize(exe.parent().ok_or("error.invalid_game_path")?)
+                    .map_err(|e| GameError::detail("error.invalid_game_path", e))?,
             ));
         }
         valid = unsafe { Module32NextW(modules.0, &mut module) } != 0;
@@ -212,57 +119,130 @@ fn find_game() -> Result<(u32, usize, std::path::PathBuf), GameError> {
     Err("error.game_loading".into())
 }
 
-pub(crate) fn verify_installation(dir: &Path) -> Result<(), GameError> {
-    verified_hash(&dir.join("GameAssembly.dll"), ASSEMBLY_HASH)?;
-    verified_hash(
-        &dir.join("StarTrekOutpostsUnknown_Data/il2cpp_data/Metadata/global-metadata.dat"),
-        METADATA_HASH,
-    )?;
-    verified_hash(
-        &dir.join("StarTrekOutpostsUnknown_Data/StreamingAssets/aa/catalog.bin"),
-        "5d425a60dc121eb5a4e41d7962ed4d639cc498e78fb3107f874047c319c111ec",
-    )
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct CameraState {
     pub original: f32,
     pub maximum: f32,
     pub current: f32,
+    pub speed: f32,
 }
 
-#[derive(Clone, Copy)]
-struct Camera {
-    address: usize,
-    native: usize,
-    original: f32,
-    last_written: f32,
+fn now_ms() -> Result<u64, GameError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .map_err(|e| GameError::detail("error.system_access", e))
+}
+fn read_json(path: &Path) -> Result<serde_json::Value, GameError> {
+    let input = File::open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            GameError::from("error.mod_unavailable")
+        } else {
+            GameError::detail("error.file_read", e)
+        }
+    })?;
+    let mut bytes = Vec::new();
+    input
+        .take(16_385)
+        .read_to_end(&mut bytes)
+        .map_err(|e| GameError::detail("error.file_read", e))?;
+    if bytes.len() > 16_384 {
+        return Err("error.mod_incompatible".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| GameError::detail("error.mod_incompatible", e))
+}
+fn parse_status(
+    value: &serde_json::Value,
+    pid: u32,
+    game_dir: &Path,
+    now: u64,
+) -> Result<Option<CameraState>, GameError> {
+    if value["bridge_version"].as_u64() != Some(2) {
+        return Err("error.mod_unavailable".into());
+    }
+    if value["schema"].as_u64() != Some(1) || value["pid"].as_u64() != Some(pid as u64) {
+        return Err("error.mod_incompatible".into());
+    }
+    let updated = value["updated_utc_ms"]
+        .as_u64()
+        .ok_or("error.mod_incompatible")?;
+    if updated > now.saturating_add(1000) || now.saturating_sub(updated) > STATUS_MAX_AGE_MS {
+        return Err("error.mod_unavailable".into());
+    }
+    let reported_dir = value["game_dir"]
+        .as_str()
+        .ok_or("error.invalid_game_path")?;
+    let canonical = fs::canonicalize(reported_dir)
+        .map_err(|e| GameError::detail("error.invalid_game_path", e))?;
+    if !canonical
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&game_dir.to_string_lossy())
+    {
+        return Err("error.invalid_game_path".into());
+    }
+    if value["compatible"].as_bool() != Some(true) {
+        return Err(GameError::detail(
+            "error.mod_incompatible",
+            value["error"].as_str().unwrap_or("Camera API unavailable"),
+        ));
+    }
+    if let Some(error) = value["error"].as_str().filter(|e| !e.is_empty()) {
+        return Err(GameError::detail("error.mod_incompatible", error));
+    }
+    match value["camera_ready"].as_bool() {
+        Some(false) => return Ok(None),
+        Some(true) => {}
+        None => return Err("error.mod_incompatible".into()),
+    }
+    let number = |key: &str| -> Result<f32, GameError> {
+        let n = value[key].as_f64().ok_or("error.camera_bounds")? as f32;
+        if !n.is_finite() {
+            return Err("error.camera_bounds".into());
+        }
+        Ok(n)
+    };
+    let state = CameraState {
+        original: number("original")?,
+        maximum: number("maximum")?,
+        current: number("current")?,
+        speed: number("speed")?,
+    };
+    if !(0.0..=MAX_LIMIT).contains(&state.original)
+        || state.original == 0.0
+        || !(300.0..=MAX_LIMIT).contains(&state.maximum)
+        || !(0.0..=1_000_000.0).contains(&state.current)
+        || !(0.25..=3.0).contains(&state.speed)
+    {
+        return Err("error.camera_bounds".into());
+    }
+    Ok(Some(state))
+}
+fn remove_owned_lease(path: &Path, owner: &str) -> Result<(), GameError> {
+    let value = match read_json(path) {
+        Ok(value) => value,
+        Err(error) if error.key == "error.mod_unavailable" => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if value["owner"].as_str() != Some(owner) {
+        return Err("error.restore_external_change".into());
+    }
+    fs::remove_file(path).map_err(|e| GameError::detail("error.write_failed", e))
 }
 
 pub struct GameSession {
-    pub game_dir: std::path::PathBuf,
+    pub game_dir: PathBuf,
+    pub feature_error: Option<String>,
+    pid: u32,
     process: Handle,
     _connection_lock: Handle,
-    class_slot: usize,
-    camera: Option<Camera>,
+    status_path: PathBuf,
+    lease_path: PathBuf,
+    owner: String,
+    desired: Option<(f32, f32, Features)>,
 }
-
-pub const MAX_LIMIT: f32 = 1000.0;
-
-fn validated_limit(original: f32, limit: f32) -> Result<f32, GameError> {
-    if !original.is_finite()
-        || original <= 0.0
-        || !limit.is_finite()
-        || !(original..=MAX_LIMIT).contains(&limit)
-    {
-        return Err("error.invalid_limit".into());
-    }
-    Ok(limit)
-}
-
 impl GameSession {
     pub fn connect() -> Result<Self, GameError> {
-        let (pid, base, path) = find_game()?;
+        let (pid, game_dir) = find_game()?;
         let mutex_name: Vec<u16> = format!("Local\\SubspaceToolkit-{pid}\0")
             .encode_utf16()
             .collect();
@@ -272,136 +252,103 @@ impl GameSession {
         if already_connected {
             return Err("error.already_connected".into());
         }
-        verified_hash(&path, ASSEMBLY_HASH)?;
-        verified_hash(
-            &path
-                .parent()
-                .ok_or("error.invalid_game_path")?
-                .join("StarTrekOutpostsUnknown_Data/il2cpp_data/Metadata/global-metadata.dat"),
-            METADATA_HASH,
-        )?;
-        let process = Handle::new(unsafe {
-            OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION
-                    | PROCESS_VM_READ
-                    | PROCESS_VM_WRITE
-                    | PROCESS_VM_OPERATION,
-                0,
-                pid,
-            )
-        })?;
-        if process.bytes::<59>(base + GET_INSTANCE_RVA)? != GET_INSTANCE_BYTES {
-            return Err("error.loaded_code_mismatch".into());
-        }
+        let process =
+            Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
+        let root = PathBuf::from(
+            std::env::var_os("LOCALAPPDATA")
+                .filter(|s| !s.is_empty())
+                .ok_or("error.invalid_game_path")?,
+        )
+        .join("SubspaceToolkit");
         let mut session = Self {
-            game_dir: path
-                .parent()
-                .ok_or("error.invalid_game_path")?
-                .to_path_buf(),
+            game_dir,
+            feature_error: None,
+            pid,
             process,
             _connection_lock: connection_lock,
-            class_slot: base + CAMERA_CLASS_RVA,
-            camera: None,
+            status_path: root.join(format!("status-{pid}.json")),
+            lease_path: root.join(format!("live-{pid}.json")),
+            owner: format!(
+                "{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|e| GameError::detail("error.system_access", e))?
+                    .as_nanos()
+            ),
+            desired: None,
         };
+        let ready = read_json(&session.status_path).ok().is_some_and(|status| {
+            now_ms().is_ok_and(|now| parse_status(&status, pid, &session.game_dir, now).is_ok())
+        });
+        if !ready {
+            crate::inject::ensure_attached(pid, &session.game_dir)?;
+        }
         session.poll()?;
         Ok(session)
     }
-
-    fn active_address(&self) -> Result<(usize, usize), GameError> {
-        let class = self.process.pointer(self.class_slot)?;
-        if class == 0 {
-            return Ok((0, 0));
-        }
-        let fields = self.process.pointer(class + STATIC_FIELDS)?;
-        if fields == 0 {
-            return Ok((class, 0));
-        }
-        let object = self.process.pointer(fields)?;
-        if object != 0 && self.process.pointer(object)? != class {
-            return Err("error.camera_type_mismatch".into());
-        }
-        Ok((class, object))
-    }
-
     pub fn poll(&mut self) -> Result<Option<CameraState>, GameError> {
-        let (_, address) = self.active_address()?;
-        if address == 0 {
-            return Ok(None);
+        let mut code = 0;
+        if unsafe { GetExitCodeProcess(self.process.0, &mut code) } == 0 || code != 259 {
+            return Err("error.game_access_lost".into());
         }
-        let native = self.process.pointer(address + 0x10)?;
-        if native == 0 {
-            return Ok(None);
-        }
-        if self
-            .camera
-            .is_some_and(|c| c.address != address || c.native != native)
+        let value = read_json(&self.status_path)?;
+        self.feature_error = value["feature_error"].as_str().map(str::to_owned);
+        let state = parse_status(&value, self.pid, &self.game_dir, now_ms()?)?;
+        if state.is_some()
+            && let Some(desired) = self.desired
         {
-            // Scene changes require a fresh connection; never write into a retired Unity object.
-            return Err("error.camera_changed".into());
+            self.write_command(desired)?;
         }
-        let minimum = self.process.float(address + MINIMUM)?;
-        let maximum = self.process.float(address + MAXIMUM)?;
-        let current = self.process.float(address + CURRENT)?;
-        if !minimum.is_finite()
-            || !maximum.is_finite()
-            || !current.is_finite()
-            || minimum < 0.0
-            || maximum <= minimum
-            || maximum > 1000000.0
-            || current < 0.0
-            || current > 1000000.0
-        {
-            return Err("error.camera_bounds".into());
-        }
-        let camera = self.camera.get_or_insert(Camera {
-            address,
-            native,
-            original: maximum,
-            last_written: maximum,
-        });
-        if maximum != camera.last_written {
-            return Err("error.external_change".into());
-        }
-        Ok(Some(CameraState {
-            original: camera.original,
-            maximum,
-            current,
-        }))
+        Ok(state)
     }
-
-    pub fn set_limit(&mut self, limit: f32) -> Result<(), GameError> {
-        let state = self.poll()?.ok_or("error.camera_unavailable")?;
-        let maximum = validated_limit(state.original, limit)?;
-        let camera = self.camera.as_mut().ok_or("error.camera_unavailable")?;
-        self.process
-            .write_float(camera.address + MAXIMUM, maximum)?;
-        camera.last_written = maximum;
+    fn write_command(&mut self, desired: (f32, f32, Features)) -> Result<(), GameError> {
+        let now = now_ms()?;
+        match read_json(&self.lease_path) {
+            Ok(value)
+                if value["owner"].as_str() != Some(&self.owner)
+                    && value["expires_utc_ms"]
+                        .as_u64()
+                        .is_none_or(|expires| expires > now) =>
+            {
+                return Err("error.external_change".into());
+            }
+            Err(error) if error.key != "error.mod_unavailable" => return Err(error),
+            _ => {}
+        }
+        let command = serde_json::json!({"schema":1,"owner":self.owner,"zoom_limit":desired.0,"movement_speed":desired.1,"expires_utc_ms":now+LEASE_MS,"resource_highlight":desired.2.resource_highlight,"repeat_build":desired.2.repeat_build});
+        atomic_write(
+            &self.lease_path,
+            &serde_json::to_vec(&command)
+                .map_err(|e| GameError::detail("error.write_failed", e))?,
+        )
+        .map_err(|e| GameError::detail("error.write_failed", e))?;
+        self.desired = Some(desired);
         Ok(())
     }
-
+    pub fn apply(
+        &mut self,
+        limit: f32,
+        multiplier: f32,
+        features: Features,
+    ) -> Result<(), GameError> {
+        if !limit.is_finite() || !(300.0..=MAX_LIMIT).contains(&limit) {
+            return Err("error.invalid_limit".into());
+        }
+        if !multiplier.is_finite() || !(0.25..=3.0).contains(&multiplier) {
+            return Err("error.invalid_speed".into());
+        }
+        self.poll()?.ok_or("error.camera_unavailable")?;
+        self.write_command((limit, multiplier, features))
+    }
     pub fn restore(&mut self) -> Result<(), GameError> {
-        if let Some(camera) = self.camera {
-            if camera.last_written == camera.original {
-                return Ok(());
-            }
-            let (_, address) = self.active_address()?;
-            if address != camera.address || self.process.pointer(address + 0x10)? != camera.native {
-                return Err("error.restore_camera_gone".into());
-            }
-            let value = self.process.float(address + MAXIMUM)?;
-            if value != camera.last_written {
-                return Err("error.restore_external_change".into());
-            }
-            self.process
-                .write_float(address + MAXIMUM, camera.original)?;
-            if let Some(ref mut c) = self.camera {
-                c.last_written = c.original;
-            }
+        if self.desired.is_some() {
+            remove_owned_lease(&self.lease_path, &self.owner)?;
+            self.desired = None;
         }
         Ok(())
     }
 }
-
 impl Drop for GameSession {
     fn drop(&mut self) {
         let _ = self.restore();
@@ -411,128 +358,144 @@ impl Drop for GameSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct Fixture {
-        session: GameSession,
-        _class: Box<[usize; 64]>,
-        fields: Box<usize>,
-        object: Box<[usize; 80]>,
-        _slot: Box<usize>,
+    fn status(dir: &Path, pid: u32, now: u64) -> serde_json::Value {
+        serde_json::json!({"schema":1,"bridge_version":2,"pid":pid,"game_dir":dir,"updated_utc_ms":now,
+            "compatible":true,"camera_ready":true,"original":300,"maximum":1000,"current":165,"speed":2.0,"error":null})
     }
-    fn fixture() -> Fixture {
-        use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    #[test]
+    fn status_checks_identity_freshness_compatibility_and_camera_bounds() {
+        let dir = fs::canonicalize(std::env::temp_dir()).unwrap();
+        let now = 10_000;
+        let valid = status(&dir, 42, now);
+        assert_eq!(
+            parse_status(&valid, 42, &dir, now).unwrap().unwrap().speed,
+            2.0
+        );
+        for (key, value, expected) in [
+            (
+                "bridge_version",
+                serde_json::json!(1),
+                "error.mod_unavailable",
+            ),
+            ("pid", serde_json::json!(43), "error.mod_incompatible"),
+            ("schema", serde_json::json!(2), "error.mod_incompatible"),
+            (
+                "updated_utc_ms",
+                serde_json::json!(4999),
+                "error.mod_unavailable",
+            ),
+            (
+                "updated_utc_ms",
+                serde_json::json!(11001),
+                "error.mod_unavailable",
+            ),
+            (
+                "compatible",
+                serde_json::json!(false),
+                "error.mod_incompatible",
+            ),
+            ("maximum", serde_json::json!(1001), "error.camera_bounds"),
+            ("speed", serde_json::json!(0.0), "error.camera_bounds"),
+            ("current", serde_json::Value::Null, "error.camera_bounds"),
+            (
+                "error",
+                serde_json::json!("Camera modified externally"),
+                "error.mod_incompatible",
+            ),
+        ] {
+            let mut value_copy = valid.clone();
+            value_copy[key] = value;
+            assert_eq!(
+                parse_status(&value_copy, 42, &dir, now).unwrap_err().key,
+                expected,
+                "{key}"
+            );
+        }
+        let mut loading = valid.clone();
+        loading["camera_ready"] = serde_json::json!(false);
+        loading["maximum"] = serde_json::json!(0);
+        assert!(parse_status(&loading, 42, &dir, now).unwrap().is_none());
+        assert!(parse_status(&valid, 42, &dir.join("wrong"), now).is_err());
+    }
+    #[test]
+    fn trainer_lease_preserves_permanent_settings_reports_actual_state_and_only_removes_own_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "subspace-bridge-{}-{}",
+            std::process::id(),
+            now_ms().unwrap()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = fs::canonicalize(dir).unwrap();
         let open = || {
             Handle::new(unsafe {
-                OpenProcess(
-                    PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
-                    0,
-                    GetCurrentProcessId(),
-                )
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, std::process::id())
             })
             .unwrap()
         };
-        let mut class = Box::new([0usize; 64]);
-        let mut object = Box::new([0usize; 80]);
-        object[0] = class.as_mut_ptr() as usize;
-        object[2] = 0x10000;
-        let mut fields = Box::new(object.as_mut_ptr() as usize);
-        class[STATIC_FIELDS / 8] = (&mut *fields) as *mut usize as usize;
-        let mut slot = Box::new(class.as_mut_ptr() as usize);
-        let session = GameSession {
-            game_dir: Default::default(),
+        let status_path = dir.join("status.json");
+        fs::write(
+            &status_path,
+            status(&dir, std::process::id(), now_ms().unwrap()).to_string(),
+        )
+        .unwrap();
+        let permanent = dir.join("SubspaceToolkit.json");
+        fs::write(&permanent, b"durable settings must stay unchanged").unwrap();
+        let mut session = GameSession {
+            game_dir: dir.clone(),
+            feature_error: None,
+            pid: std::process::id(),
             process: open(),
             _connection_lock: open(),
-            class_slot: (&mut *slot) as *mut usize as usize,
-            camera: None,
+            status_path,
+            lease_path: dir.join("live.json"),
+            owner: "test-owner".into(),
+            desired: None,
         };
-        for (offset, value) in [(MINIMUM, 15.0), (MAXIMUM, 300.0), (CURRENT, 300.0)] {
-            session
-                .process
-                .write_float(*fields + offset, value)
-                .unwrap();
+        let features = Features {
+            resource_highlight: true,
+            repeat_build: true,
+        };
+        session.apply(500.0, 3.0, features).unwrap();
+        let command = read_json(&session.lease_path).unwrap();
+        assert_eq!(command["zoom_limit"], 500.0);
+        assert_eq!(command["movement_speed"], 3.0);
+        assert_eq!(command["resource_highlight"], true);
+        assert_eq!(command["repeat_build"], true);
+        assert_eq!(command["owner"], "test-owner");
+        assert!(command["expires_utc_ms"].as_u64().unwrap() > now_ms().unwrap());
+        // A successfully written command is not evidence the game has applied it.
+        assert_eq!(session.poll().unwrap().unwrap().maximum, 1000.0);
+        assert_eq!(session.poll().unwrap().unwrap().speed, 2.0);
+        for invalid in [f32::NAN, f32::INFINITY, 0.0, 3.01] {
+            assert!(session.apply(500.0, invalid, features).is_err());
         }
-        Fixture {
-            session,
-            _class: class,
-            fields,
-            object,
-            _slot: slot,
+        for invalid in [f32::NAN, f32::INFINITY, 299.0, 1001.0] {
+            assert!(session.apply(invalid, 3.0, features).is_err());
         }
-    }
-    #[test]
-    fn camera_chain_apply_reset_and_foreign_change_guard() {
-        let mut fixture = fixture();
-        assert_eq!(fixture.session.poll().unwrap().unwrap().maximum, 300.0);
-        fixture.session.set_limit(1000.0).unwrap();
-        assert_eq!(fixture.session.poll().unwrap().unwrap().maximum, 1000.0);
-        fixture.session.restore().unwrap();
-        assert_eq!(fixture.session.poll().unwrap().unwrap().maximum, 300.0);
-        fixture.session.set_limit(900.0).unwrap();
-        fixture
-            .session
-            .process
-            .write_float(*fixture.fields + MAXIMUM, 777.0)
-            .unwrap();
-        assert!(fixture.session.set_limit(1000.0).is_err());
-        assert!(fixture.session.restore().is_err());
+        session.restore().unwrap();
+        assert!(!session.lease_path.exists());
+        session.apply(500.0, 0.25, Features::default()).unwrap();
+        let mut foreign = read_json(&session.lease_path).unwrap();
+        foreign["owner"] = serde_json::json!("someone-else");
+        fs::write(&session.lease_path, foreign.to_string()).unwrap();
         assert_eq!(
-            fixture
-                .session
-                .process
-                .float(*fixture.fields + MAXIMUM)
-                .unwrap(),
-            777.0
+            session.apply(500.0, 1.0, features).unwrap_err().key,
+            "error.external_change"
         );
-    }
-    #[test]
-    fn missing_destroyed_or_wrong_class_camera_never_written() {
-        let mut fixture = fixture();
-        let original_class = fixture.object[0];
-        fixture.object[0] = 0x10000;
-        assert!(fixture.session.set_limit(1000.0).is_err());
-        fixture.object[0] = original_class;
-        fixture.object[2] = 0;
-        assert!(fixture.session.set_limit(1000.0).is_err());
         assert_eq!(
-            fixture
-                .session
-                .process
-                .float(*fixture.fields + MAXIMUM)
-                .unwrap(),
-            300.0
+            session.restore().unwrap_err().key,
+            "error.restore_external_change"
         );
-        *fixture.fields = 0;
-        assert!(fixture.session.poll().unwrap().is_none());
-    }
-    #[test]
-    fn absolute_limit_boundaries_and_invalid_floats() {
-        assert_eq!(validated_limit(150.0, 150.0).unwrap(), 150.0);
-        assert_eq!(validated_limit(150.0, 1000.0).unwrap(), 1000.0);
-        for factor in [0.0, 149.9, 1000.1, f32::NAN, f32::INFINITY] {
-            assert!(validated_limit(150.0, factor).is_err());
-        }
-        for original in [-10.0, 0.0, f32::NAN, f32::INFINITY] {
-            assert!(validated_limit(original, 300.0).is_err());
-        }
-    }
-    #[test]
-    fn reads_and_writes_exactly_one_float() {
-        use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-        let process = Handle::new(unsafe {
-            OpenProcess(
-                PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
-                0,
-                GetCurrentProcessId(),
-            )
-        })
-        .unwrap();
-        let mut values = Box::new([17.0f32, 150.0, 29.0]);
-        let address = (&mut values[1]) as *mut f32 as usize;
-        assert_eq!(process.float(address).unwrap(), 150.0);
-        process.write_float(address, 1500.0).unwrap();
-        assert_eq!(*values, [17.0, 1500.0, 29.0]);
-        process.write_float(address, 150.0).unwrap();
-        assert_eq!(*values, [17.0, 150.0, 29.0]);
-        assert!(process.write_float(address, f32::NAN).is_err());
-        assert!(process.float(0).is_err());
+        assert_eq!(
+            read_json(&session.lease_path).unwrap()["owner"],
+            "someone-else"
+        );
+        assert_eq!(
+            fs::read(&permanent).unwrap(),
+            b"durable settings must stay unchanged"
+        );
+        drop(session);
+        assert!(dir.starts_with(fs::canonicalize(std::env::temp_dir()).unwrap()));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

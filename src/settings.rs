@@ -7,9 +7,32 @@ use windows_sys::Win32::Storage::FileSystem::{
     MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     pub zoom_limit: Option<f32>,
+    pub movement_speed: Option<f32>,
+    pub language: Option<String>,
+    pub game_dir: Option<PathBuf>,
+    pub features: Features,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Features {
+    pub resource_highlight: bool,
+    pub repeat_build: bool,
+}
+impl Features {
+    pub fn parse(value: &serde_json::Value) -> Result<Self, String> {
+        let flag = |key: &str| {
+            value.get(key).map_or(Ok(false), |v| {
+                v.as_bool().ok_or_else(|| format!("{key} must be boolean"))
+            })
+        };
+        Ok(Self {
+            resource_highlight: flag("resource_highlight")?,
+            repeat_build: flag("repeat_build")?,
+        })
+    }
 }
 
 impl Settings {
@@ -49,11 +72,46 @@ impl Settings {
                 Some(value as f32)
             }
         };
-        Ok(Self { zoom_limit })
+        let movement_speed = match object.get("movement_speed") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => {
+                let n = v.as_f64().ok_or("movement_speed must be numeric")?;
+                if !(0.25..=3.0).contains(&n) {
+                    return Err("movement_speed must be between 0.25 and 3".into());
+                }
+                Some(n as f32)
+            }
+        };
+        let text = |key: &str| -> Result<Option<String>, String> {
+            match object.get(key) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(value) => value
+                    .as_str()
+                    .map(|s| Some(s.to_owned()))
+                    .ok_or_else(|| format!("{key} must be text or null")),
+            }
+        };
+        let language = text("language")?;
+        if language.as_ref().is_some_and(|s| {
+            s.is_empty() || !s.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-')
+        }) {
+            return Err("Invalid language code".into());
+        }
+        let game_dir = text("game_dir")?.map(PathBuf::from);
+        if game_dir.as_ref().is_some_and(|p| !p.is_absolute()) {
+            return Err("Game folder must be absolute".into());
+        }
+        Ok(Self {
+            zoom_limit,
+            movement_speed,
+            language,
+            game_dir,
+            features: Features::parse(&value)?,
+        })
     }
 
-    fn save_to(&self, path: &Path) -> Result<(), String> {
-        if self.zoom_limit.is_none() {
+    pub(crate) fn save_to(&self, path: &Path) -> Result<(), String> {
+        if self == &Self::default() {
             return match fs::remove_file(path) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -66,13 +124,28 @@ impl Settings {
         {
             return Err("zoom_limit must be between 1 and 1000".into());
         }
-        let data = serde_json::to_vec_pretty(&serde_json::json!({"zoom_limit": self.zoom_limit}))
+        if self
+            .movement_speed
+            .is_some_and(|n| !n.is_finite() || !(0.25..=3.0).contains(&n))
+        {
+            return Err("movement_speed must be between 0.25 and 3".into());
+        }
+        let data = serde_json::to_vec_pretty(&serde_json::json!({"zoom_limit": self.zoom_limit, "movement_speed": self.movement_speed, "language": self.language, "game_dir": self.game_dir, "resource_highlight": self.features.resource_highlight, "repeat_build": self.features.repeat_build}))
             .map_err(|e| e.to_string())?;
+        Self::parse(&data)?;
         atomic_write(path, &data)
     }
 }
 
 pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
+    write_atomically(path, data, true)
+}
+
+pub(crate) fn atomic_create(path: &Path, data: &[u8]) -> Result<(), String> {
+    write_atomically(path, data, false)
+}
+
+fn write_atomically(path: &Path, data: &[u8], replace: bool) -> Result<(), String> {
     let parent = path.parent().ok_or("settings path has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
@@ -100,7 +173,11 @@ pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
             MoveFileExW(
                 wide(&temp).as_ptr(),
                 wide(path).as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                (if replace {
+                    MOVEFILE_REPLACE_EXISTING
+                } else {
+                    0
+                }) | MOVEFILE_WRITE_THROUGH,
             )
         } == 0
         {
@@ -114,7 +191,7 @@ pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     result
 }
 
-fn settings_path() -> Result<PathBuf, String> {
+pub(crate) fn settings_path() -> Result<PathBuf, String> {
     std::env::var_os("LOCALAPPDATA")
         .filter(|path| !path.is_empty())
         .map(|path| PathBuf::from(path).join("SubspaceToolkit/settings.json"))
@@ -131,6 +208,11 @@ mod tests {
             r#"{"zoom_limit":0}"#,
             r#"{"zoom_limit":1000.1}"#,
             r#"{"zoom_limit":"1000"}"#,
+            r#"{"movement_speed":0}"#,
+            r#"{"movement_speed":3.1}"#,
+            r#"{"movement_speed":"fast"}"#,
+            r#"{"resource_highlight":1}"#,
+            r#"{"repeat_build":"true"}"#,
             "[]",
             "not json",
         ] {
@@ -163,17 +245,46 @@ mod tests {
         assert_eq!(Settings::load_from(&path).unwrap(), Settings::default());
         Settings {
             zoom_limit: Some(700.0),
+            movement_speed: Some(2.0),
+            features: Features {
+                resource_highlight: true,
+                repeat_build: true,
+            },
+            ..Default::default()
         }
         .save_to(&path)
         .unwrap();
+        assert_eq!(
+            Settings::load_from(&path).unwrap().movement_speed,
+            Some(2.0)
+        );
+        assert_eq!(
+            Settings::load_from(&path).unwrap().features,
+            Features {
+                resource_highlight: true,
+                repeat_build: true
+            }
+        );
+        let before = fs::read(&path).unwrap();
+        assert!(
+            Settings {
+                movement_speed: Some(f32::NAN),
+                ..Default::default()
+            }
+            .save_to(&path)
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
         Settings {
             zoom_limit: Some(1000.0),
+            ..Default::default()
         }
         .save_to(&path)
         .unwrap();
         assert!(
             Settings {
-                zoom_limit: Some(f32::NAN)
+                zoom_limit: Some(f32::NAN),
+                ..Default::default()
             }
             .save_to(&path)
             .is_err()
@@ -184,5 +295,20 @@ mod tests {
         assert!(!path.exists());
         Settings::default().save_to(&path).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn language_and_folder_round_trip_with_legacy_defaults() {
+        let settings =
+            Settings::parse(br#"{"language":"de","game_dir":"E:/Game","zoom_limit":700}"#).unwrap();
+        assert_eq!(settings.language.as_deref(), Some("de"));
+        assert_eq!(settings.game_dir, Some(PathBuf::from("E:/Game")));
+        assert_eq!(
+            Settings::parse(br#"{"zoom_limit":700}"#).unwrap().language,
+            None
+        );
+        for input in [r#"{"language":"../de"}"#, r#"{"game_dir":"relative"}"#] {
+            assert!(Settings::parse(input.as_bytes()).is_err());
+        }
     }
 }

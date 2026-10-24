@@ -1,6 +1,17 @@
 /target/
 /analysis/
 /dist/
+/mod/bin/
+/mod/obj/
+/live/bin/
+/live/obj/
+/live/Generator/bin/
+/live/Generator/obj/
+/live/Checks/bin/
+/live/Checks/obj/
+/live/host/target/
+/scripts/check-mod/bin/
+/scripts/check-mod/obj/
 /gameassembly-identity.json
 /PLAN.md
 /PRODUCT.md

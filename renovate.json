@@ -8,6 +8,8 @@
   "automergeType": "pr",
   "automergeStrategy": "squash",
   "platformAutomerge": true,
+  "vulnerabilityAlerts": { "enabled": true, "automerge": true },
+  "git-submodules": { "enabled": true },
   "ignoreTests": false,
   "dependencyDashboardApproval": false,
   "major": {

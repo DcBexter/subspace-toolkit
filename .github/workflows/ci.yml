@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '41 5 * * *'
+    - cron: '11 6 * * 1'
 
 permissions:
   contents: read
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   windows:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' || github.event.schedule == '11 6 * * 1'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:

@@ -55,6 +55,7 @@
   "mods_tab": "Mods",
   "resource_highlight": "Highlight resources on hover",
   "repeat_build": "Repeat building with Shift",
+  "move_buildings": "Move all buildings",
   "feature_error": "Mod unavailable: {detail}",
   "error.payload_invalid": "Mod package damaged: {detail}. Download and extract it again.",
   "error.payload_conflict": "Different installed file: {detail}. Existing files left unchanged.",

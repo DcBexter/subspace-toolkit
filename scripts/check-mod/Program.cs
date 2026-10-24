@@ -36,15 +36,16 @@ foreach (string json in new[] { Settings(2, 1000, 3), Settings(1, 1001, 3), Sett
 }
 var legacy = Read(Settings(1, 700, 1));
 bool Flag(object value, string name) => (bool)value.GetType().GetProperty(name)!.GetValue(value)!;
-Assert(!Flag(legacy, "ResourceHighlight") && !Flag(legacy, "RepeatBuild"), "legacy defaults");
-var enabled = Read("""{"schema":1,"zoom_limit":700,"movement_speed":1,"resource_highlight":true,"repeat_build":true}""");
-Assert(Flag(enabled, "ResourceHighlight") && Flag(enabled, "RepeatBuild"), "feature switches");
+Assert(!Flag(legacy, "ResourceHighlight") && !Flag(legacy, "RepeatBuild") && !Flag(legacy, "MoveBuildings"), "legacy defaults");
+var enabled = Read("""{"schema":1,"zoom_limit":700,"movement_speed":1,"resource_highlight":true,"repeat_build":true,"move_buildings":true}""");
+Assert(Flag(enabled, "ResourceHighlight") && Flag(enabled, "RepeatBuild") && Flag(enabled, "MoveBuildings"), "feature switches");
 var readFile = assembly.GetType("SubspaceToolkit.Engine")!.GetMethod("ReadSettings", BindingFlags.NonPublic | BindingFlags.Static)!;
 string temp = Path.Combine(Path.GetTempPath(), "subspace-config-check-" + Guid.NewGuid() + ".json");
 try {
     foreach (string bad in new[] {
         """{"schema":1,"zoom_limit":700,"movement_speed":1,"repeat_build":"true"}""",
         """{"schema":1,"zoom_limit":700,"movement_speed":1,"resource_highlight":null}""",
+        """{"schema":1,"zoom_limit":700,"movement_speed":1,"move_buildings":"true"}""",
         """{"schema":9999999999999999999999999,"zoom_limit":700,"movement_speed":1}"""
     }) {
         File.WriteAllText(temp, bad);
@@ -64,14 +65,14 @@ var select = assembly.GetType("SubspaceToolkit.Engine")!.GetMethod("SelectSettin
 string permanent = temp + ".permanent";
 try {
     File.WriteAllText(permanent, """{"schema":1,"zoom_limit":1000,"movement_speed":3,"resource_highlight":true,"repeat_build":false}""");
-    File.WriteAllText(temp, """{"schema":1,"zoom_limit":500,"movement_speed":0.5,"resource_highlight":false,"repeat_build":true,"expires_utc_ms":103000,"owner":"trainer"}""");
+    File.WriteAllText(temp, """{"schema":1,"zoom_limit":500,"movement_speed":0.5,"resource_highlight":false,"repeat_build":true,"move_buildings":true,"expires_utc_ms":103000,"owner":"trainer"}""");
     var before = File.ReadAllBytes(permanent);
     object Selected(long now) => select.Invoke(null, new object[] { temp, permanent, now });
     var live = Selected(100000);
-    Assert(!Flag(live, "ResourceHighlight") && Flag(live, "RepeatBuild"), "trainer overrides every permanent flag");
+    Assert(!Flag(live, "ResourceHighlight") && Flag(live, "RepeatBuild") && Flag(live, "MoveBuildings"), "trainer overrides every permanent flag");
     Assert((float)live.GetType().GetProperty("Speed")!.GetValue(live)! == .5f, "trainer camera independent");
     var expired = Selected(104000);
-    Assert(Flag(expired, "ResourceHighlight") && !Flag(expired, "RepeatBuild"), "lease expiry restores permanent flags");
+    Assert(Flag(expired, "ResourceHighlight") && !Flag(expired, "RepeatBuild") && !Flag(expired, "MoveBuildings"), "lease expiry restores permanent flags");
     Assert(File.ReadAllBytes(permanent).SequenceEqual(before), "reading trainer never changes permanent file");
     File.WriteAllText(permanent, "broken permanent file");
     Assert(Selected(100000) != null, "valid trainer independent of invalid permanent config");
@@ -185,6 +186,69 @@ crew.controller = new CrewCamera { Pointer = 2, currentZoomPercent = .3f };
 beforeCrew.Invoke(null, stoppedArgs);
 Assert(crew.controller.currentZoomPercent == .3f && stoppedArgs[1] == null, "unowned camera remains untouched");
 Console.WriteLine($"{checks} total checks including crew visibility and camera isolation passed");
+
+var moveType = assembly.GetType("SubspaceToolkit.MoveBuildings")!;
+var move = RuntimeHelpers.GetUninitializedObject(moveType);
+void MoveField(string name, object value) => moveType.GetField(name, privateInstance)!.SetValue(move, value);
+MoveField("agentType", typeof(MovingAgent).GetProperty(nameof(MovingAgent.AgentType))!);
+MoveField("definition", typeof(MovingAgent).GetProperty(nameof(MovingAgent.RulesDefinition))!);
+MoveField("movable", typeof(MovingRules).GetProperty(nameof(MovingRules.IsBuildingMovable))!);
+MoveField("building", MovingKind.Building);
+MoveField("enabled", true);
+moveType.GetField("current", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, move);
+var beforeButtons = moveType.GetMethod("BeforeButtons", BindingFlags.NonPublic | BindingFlags.Static)!;
+var afterButtons = moveType.GetMethod("AfterButtons", BindingFlags.NonPublic | BindingFlags.Static)!;
+var movingAgent = new MovingAgent();
+foreach (int flags in new[] { 0, 256, 2048, 256 | 2048 }) {
+    movingAgent.Flags = flags;
+    object?[] movementArgs = { movingAgent, null };
+    beforeButtons.Invoke(null, movementArgs);
+    try {
+        Assert(movingAgent.RulesDefinition!.IsBuildingMovable, "unlocks building only during button calculation");
+        Assert(movingAgent.NativeButtonVisible() == (flags == 0), "construction and demolition guards stay authoritative");
+        object?[] nested = { movingAgent, null };
+        beforeButtons.Invoke(null, nested);
+        afterButtons.Invoke(null, new[] { nested[1] });
+        Assert(movingAgent.RulesDefinition.IsBuildingMovable, "nested callback cannot restore outer scope early");
+    } finally { afterButtons.Invoke(null, new[] { movementArgs[1] }); }
+    Assert(!movingAgent.RulesDefinition!.IsBuildingMovable, "building definition restored after callback");
+}
+movingAgent.RulesDefinition!.IsBuildingMovable = true;
+object?[] originalMovable = { movingAgent, null };
+beforeButtons.Invoke(null, originalMovable);
+afterButtons.Invoke(null, new[] { originalMovable[1] });
+Assert(movingAgent.RulesDefinition.IsBuildingMovable && originalMovable[1] == null, "already movable building untouched");
+movingAgent.RulesDefinition.IsBuildingMovable = false;
+foreach (MovingKind kind in new[] { MovingKind.Worker, MovingKind.Resource }) {
+    movingAgent.AgentType = kind;
+    beforeButtons.Invoke(null, originalMovable);
+    Assert(!movingAgent.RulesDefinition.IsBuildingMovable && originalMovable[1] == null, "nonbuilding never unlocked");
+}
+movingAgent.AgentType = MovingKind.Building;
+MoveField("enabled", false);
+beforeButtons.Invoke(null, originalMovable);
+Assert(!movingAgent.RulesDefinition.IsBuildingMovable, "disabled mod leaves original button policy");
+MoveField("enabled", true);
+beforeButtons.Invoke(null, originalMovable);
+MoveField("enabled", false);
+afterButtons.Invoke(null, new[] { originalMovable[1] });
+Assert(!movingAgent.RulesDefinition.IsBuildingMovable, "finalizer restores even if mod disabled during callback");
+MoveField("enabled", true);
+movingAgent.RulesDefinition = null;
+beforeButtons.Invoke(null, originalMovable);
+Assert(originalMovable[1] == null, "missing definition left untouched");
+Console.WriteLine($"{checks} total checks including scoped building movement passed");
+
+public enum MovingKind { Worker, Building, Resource }
+public class MovingRules { public bool IsBuildingMovable { get; set; } }
+public class MovingAgent
+{
+    public MovingKind AgentType { get; set; } = MovingKind.Building;
+    public MovingRules? RulesDefinition { get; set; } = new();
+    public int Flags { get; set; }
+    // Predicate recovered from this build's inlined UpdateButtonStates, not a replacement in the mod.
+    public bool NativeButtonVisible() => AgentType == MovingKind.Building && RulesDefinition!.IsBuildingMovable && (Flags & 0x900) == 0;
+}
 
 public class CrewCamera
 {

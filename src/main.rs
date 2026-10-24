@@ -647,7 +647,13 @@ impl eframe::App for Toolkit {
                                     controller.catalog.text("repeat_build"),
                                 )
                                 .changed();
-                            if highlight || repeat {
+                            let move_buildings = ui
+                                .checkbox(
+                                    &mut controller.settings.features.move_buildings,
+                                    controller.catalog.text("move_buildings"),
+                                )
+                                .changed();
+                            if highlight || repeat || move_buildings {
                                 controller.apply();
                             }
                         });
@@ -735,6 +741,7 @@ mod controller_tests {
             features: settings::Features {
                 resource_highlight: true,
                 repeat_build: true,
+                move_buildings: true,
             },
             ..Default::default()
         };

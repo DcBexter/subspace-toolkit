@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>SubspaceToolkit</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <GameDirectory Condition="'$(GameDirectory)' == ''">$(OUTPOSTS_GAME_DIR)</GameDirectory>
   </PropertyGroup>
   <ItemGroup>

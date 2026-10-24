@@ -20,6 +20,7 @@ pub struct Settings {
 pub struct Features {
     pub resource_highlight: bool,
     pub repeat_build: bool,
+    pub move_buildings: bool,
 }
 impl Features {
     pub fn parse(value: &serde_json::Value) -> Result<Self, String> {
@@ -31,6 +32,7 @@ impl Features {
         Ok(Self {
             resource_highlight: flag("resource_highlight")?,
             repeat_build: flag("repeat_build")?,
+            move_buildings: flag("move_buildings")?,
         })
     }
 }
@@ -130,7 +132,7 @@ impl Settings {
         {
             return Err("movement_speed must be between 0.25 and 3".into());
         }
-        let data = serde_json::to_vec_pretty(&serde_json::json!({"zoom_limit": self.zoom_limit, "movement_speed": self.movement_speed, "language": self.language, "game_dir": self.game_dir, "resource_highlight": self.features.resource_highlight, "repeat_build": self.features.repeat_build}))
+        let data = serde_json::to_vec_pretty(&serde_json::json!({"zoom_limit": self.zoom_limit, "movement_speed": self.movement_speed, "language": self.language, "game_dir": self.game_dir, "resource_highlight": self.features.resource_highlight, "repeat_build": self.features.repeat_build, "move_buildings": self.features.move_buildings}))
             .map_err(|e| e.to_string())?;
         Self::parse(&data)?;
         atomic_write(path, &data)
@@ -213,6 +215,8 @@ mod tests {
             r#"{"movement_speed":"fast"}"#,
             r#"{"resource_highlight":1}"#,
             r#"{"repeat_build":"true"}"#,
+            r#"{"move_buildings":1}"#,
+            r#"{"move_buildings":null}"#,
             "[]",
             "not json",
         ] {
@@ -249,6 +253,7 @@ mod tests {
             features: Features {
                 resource_highlight: true,
                 repeat_build: true,
+                move_buildings: true,
             },
             ..Default::default()
         }
@@ -262,7 +267,8 @@ mod tests {
             Settings::load_from(&path).unwrap().features,
             Features {
                 resource_highlight: true,
-                repeat_build: true
+                repeat_build: true,
+                move_buildings: true,
             }
         );
         let before = fs::read(&path).unwrap();
@@ -303,6 +309,11 @@ mod tests {
             Settings::parse(br#"{"language":"de","game_dir":"E:/Game","zoom_limit":700}"#).unwrap();
         assert_eq!(settings.language.as_deref(), Some("de"));
         assert_eq!(settings.game_dir, Some(PathBuf::from("E:/Game")));
+        assert_eq!(settings.features, Features::default());
+        let legacy =
+            Settings::parse(br#"{"resource_highlight":true,"repeat_build":true}"#).unwrap();
+        assert!(legacy.features.resource_highlight && legacy.features.repeat_build);
+        assert!(!legacy.features.move_buildings);
         assert_eq!(
             Settings::parse(br#"{"zoom_limit":700}"#).unwrap().language,
             None

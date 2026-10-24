@@ -22,6 +22,7 @@ const GAME: &str = "StarTrekOutpostsUnknown.exe";
 pub const MAX_LIMIT: f32 = 1000.0;
 const STATUS_MAX_AGE_MS: u64 = 5000;
 const LEASE_MS: u64 = 3000;
+const BRIDGE_VERSION: u64 = 3;
 #[derive(Debug)]
 pub struct GameError {
     pub key: &'static str,
@@ -157,8 +158,12 @@ fn parse_status(
     game_dir: &Path,
     now: u64,
 ) -> Result<Option<CameraState>, GameError> {
-    if value["bridge_version"].as_u64() != Some(2) {
+    let version = value["bridge_version"].as_u64().unwrap_or_default();
+    if version < BRIDGE_VERSION {
         return Err("error.mod_unavailable".into());
+    }
+    if version != BRIDGE_VERSION {
+        return Err("error.mod_incompatible".into());
     }
     if value["schema"].as_u64() != Some(1) || value["pid"].as_u64() != Some(pid as u64) {
         return Err("error.mod_incompatible".into());
@@ -278,11 +283,14 @@ impl GameSession {
             ),
             desired: None,
         };
-        let ready = read_json(&session.status_path).ok().is_some_and(|status| {
-            now_ms().is_ok_and(|now| parse_status(&status, pid, &session.game_dir, now).is_ok())
-        });
-        if !ready {
-            crate::inject::ensure_attached(pid, &session.game_dir)?;
+        match read_json(&session.status_path)
+            .and_then(|status| parse_status(&status, pid, &session.game_dir, now_ms()?))
+        {
+            Ok(_) => {}
+            Err(error) if error.key == "error.mod_unavailable" => {
+                crate::inject::ensure_attached(pid, &session.game_dir)?;
+            }
+            Err(error) => return Err(error),
         }
         session.poll()?;
         Ok(session)
@@ -316,7 +324,7 @@ impl GameSession {
             Err(error) if error.key != "error.mod_unavailable" => return Err(error),
             _ => {}
         }
-        let command = serde_json::json!({"schema":1,"owner":self.owner,"zoom_limit":desired.0,"movement_speed":desired.1,"expires_utc_ms":now+LEASE_MS,"resource_highlight":desired.2.resource_highlight,"repeat_build":desired.2.repeat_build});
+        let command = serde_json::json!({"schema":1,"owner":self.owner,"zoom_limit":desired.0,"movement_speed":desired.1,"expires_utc_ms":now+LEASE_MS,"resource_highlight":desired.2.resource_highlight,"repeat_build":desired.2.repeat_build,"move_buildings":desired.2.move_buildings});
         atomic_write(
             &self.lease_path,
             &serde_json::to_vec(&command)
@@ -359,7 +367,7 @@ impl Drop for GameSession {
 mod tests {
     use super::*;
     fn status(dir: &Path, pid: u32, now: u64) -> serde_json::Value {
-        serde_json::json!({"schema":1,"bridge_version":2,"pid":pid,"game_dir":dir,"updated_utc_ms":now,
+        serde_json::json!({"schema":1,"bridge_version":3,"pid":pid,"game_dir":dir,"updated_utc_ms":now,
             "compatible":true,"camera_ready":true,"original":300,"maximum":1000,"current":165,"speed":2.0,"error":null})
     }
     #[test]
@@ -376,6 +384,16 @@ mod tests {
                 "bridge_version",
                 serde_json::json!(1),
                 "error.mod_unavailable",
+            ),
+            (
+                "bridge_version",
+                serde_json::json!(2),
+                "error.mod_unavailable",
+            ),
+            (
+                "bridge_version",
+                serde_json::json!(4),
+                "error.mod_incompatible",
             ),
             ("pid", serde_json::json!(43), "error.mod_incompatible"),
             ("schema", serde_json::json!(2), "error.mod_incompatible"),
@@ -454,6 +472,7 @@ mod tests {
         let features = Features {
             resource_highlight: true,
             repeat_build: true,
+            move_buildings: true,
         };
         session.apply(500.0, 3.0, features).unwrap();
         let command = read_json(&session.lease_path).unwrap();
@@ -461,6 +480,7 @@ mod tests {
         assert_eq!(command["movement_speed"], 3.0);
         assert_eq!(command["resource_highlight"], true);
         assert_eq!(command["repeat_build"], true);
+        assert_eq!(command["move_buildings"], true);
         assert_eq!(command["owner"], "test-owner");
         assert!(command["expires_utc_ms"].as_u64().unwrap() > now_ms().unwrap());
         // A successfully written command is not evidence the game has applied it.
@@ -476,6 +496,7 @@ mod tests {
         assert!(!session.lease_path.exists());
         session.apply(500.0, 0.25, Features::default()).unwrap();
         let mut foreign = read_json(&session.lease_path).unwrap();
+        assert_eq!(foreign["move_buildings"], false);
         foreign["owner"] = serde_json::json!("someone-else");
         fs::write(&session.lease_path, foreign.to_string()).unwrap();
         assert_eq!(

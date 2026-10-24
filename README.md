@@ -8,6 +8,7 @@ Mehr Überblick in **Star Trek: Outposts Unknown**. Für Windows, auf Deutsch un
 - Kamerageschwindigkeit für Maus und WASD einstellen.
 - Ressourcen bei Mouseover in **Anfragen und Nachschub** hervorheben.
 - Mit **Shift** mehrere gleiche Gebäude nacheinander platzieren.
+- **Alle Gebäude bewegen** freischalten – Bauplatzregeln gelten weiterhin.
 
 ## So funktioniert’s
 
@@ -16,7 +17,7 @@ Mehr Überblick in **Star Trek: Outposts Unknown**. Für Windows, auf Deutsch un
 
 **Trainer:** Funktioniert auch ohne installierte Mod im bereits laufenden Spiel. Toolkit geöffnet lassen; beim Schließen gelten wieder gespeicherte Werte, sonst Originalwerte. Erste Verbindung braucht etwas länger.
 
-**Permanent:** Spiel vor erster Installation schließen, **Permanent speichern** drücken. Danach wirken Einstellungen auch ohne Toolkit. Spielordner bei Bedarf über **Spielordner…** auswählen.
+**Permanent:** Spiel vor erster Installation oder Mod-Update schließen, **Permanent speichern** drücken. Danach wirken Einstellungen auch ohne Toolkit. Spielordner bei Bedarf über **Spielordner…** auswählen.
 
 **Reset:** Gespeicherte Einstellungen entfernen, Mods ausschalten, Originalwerte wiederherstellen. Loader bleibt für weitere Nutzung installiert. Sprachauswahl oben rechts; Spielverbindung automatisch.
 

@@ -239,15 +239,73 @@ beforeButtons.Invoke(null, originalMovable);
 Assert(originalMovable[1] == null, "missing definition left untouched");
 Console.WriteLine($"{checks} total checks including scoped building movement passed");
 
+// The native early occupancy check blocks the moving agent before footprint exclusions run.
+MoveField("moving", typeof(MovingPlacer).GetProperty(nameof(MovingPlacer.agentInMotion))!);
+MoveField("runtimeId", typeof(MovingAgent).GetProperty(nameof(MovingAgent.RuntimeId))!);
+MoveField("simulation", typeof(MovingSim).GetProperty(nameof(MovingSim.Instance))!);
+MoveField("networks", typeof(MovingSim).GetProperty(nameof(MovingSim.NetworkLayerManager))!);
+MoveField("ground", typeof(MovingNetworks).GetProperty(nameof(MovingNetworks.GroundLayer))!);
+MoveField("occupants", typeof(MovingLayer).GetProperty(nameof(MovingLayer.OccupantGrid))!);
+MoveField("tryOccupant", typeof(MovingGrid).GetMethod(nameof(MovingGrid.TryGetValue))!);
+var afterOccupied = moveType.GetMethod("AfterOccupied", BindingFlags.NonPublic | BindingFlags.Static)!;
+var placer = new MovingPlacer { agentInMotion = new MovingAgent { RuntimeId = 42 } };
+var grid = MovingSim.Instance.NetworkLayerManager.GroundLayer.OccupantGrid;
+bool Occupied(int coordinate, bool original = true) {
+    object?[] args = { placer, coordinate, original };
+    afterOccupied.Invoke(null, args);
+    return (bool)args[2]!;
+}
+grid.Cells[0] = 42;
+grid.Cells[1] = 42;
+grid.Cells[2] = 99;
+Assert(!Occupied(0) && !Occupied(1), "moving building may overlap its old footprint");
+Assert(Occupied(2), "neighbor building still blocks movement");
+Assert(Occupied(3), "unknown or unreadable cell keeps original rejection");
+Assert(!Occupied(2, false), "original allowed result remains allowed");
+MoveField("enabled", false);
+Assert(Occupied(0), "disabled mod retains native occupancy check");
+MoveField("enabled", true);
+placer.agentInMotion!.AgentType = MovingKind.Worker;
+Assert(Occupied(0), "crew placement does not bypass occupancy");
+placer.agentInMotion.AgentType = MovingKind.Building;
+placer.agentInMotion.RuntimeId = 0;
+grid.Cells[4] = 0;
+Assert(Occupied(4), "unassigned agent ID never grants an exception");
+placer.agentInMotion = null;
+Assert(Occupied(0), "new construction cannot overlap existing building");
+placer.agentInMotion = new MovingAgent { RuntimeId = 42 };
+grid.Throw = true;
+Assert(Occupied(0), "lookup failure leaves placement blocked");
+grid.Throw = false;
+Assert(Occupied(0), "failed feature remains disabled");
+Console.WriteLine($"{checks} total checks including self-overlap occupancy passed");
+
 public enum MovingKind { Worker, Building, Resource }
 public class MovingRules { public bool IsBuildingMovable { get; set; } }
 public class MovingAgent
 {
+    public uint RuntimeId { get; set; }
     public MovingKind AgentType { get; set; } = MovingKind.Building;
     public MovingRules? RulesDefinition { get; set; } = new();
     public int Flags { get; set; }
     // Predicate recovered from this build's inlined UpdateButtonStates, not a replacement in the mod.
     public bool NativeButtonVisible() => AgentType == MovingKind.Building && RulesDefinition!.IsBuildingMovable && (Flags & 0x900) == 0;
+}
+
+public class MovingPlacer { public MovingAgent? agentInMotion { get; set; } }
+public class MovingSim {
+    public static MovingSim Instance { get; } = new();
+    public MovingNetworks NetworkLayerManager { get; } = new();
+}
+public class MovingNetworks { public MovingLayer GroundLayer { get; } = new(); }
+public class MovingLayer { public MovingGrid OccupantGrid { get; } = new(); }
+public class MovingGrid {
+    public Dictionary<int, uint> Cells { get; } = new();
+    public bool Throw { get; set; }
+    public bool TryGetValue(int coordinate, out uint id) {
+        if (Throw) throw new IOException("grid unavailable");
+        return Cells.TryGetValue(coordinate, out id);
+    }
 }
 
 public class CrewCamera

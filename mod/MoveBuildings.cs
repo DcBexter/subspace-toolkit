@@ -10,7 +10,9 @@ internal sealed class MoveBuildings
     static MoveBuildings? current;
     readonly HarmonyLib.Harmony harmony;
     PropertyInfo agentType = null!, definition = null!, movable = null!;
+    PropertyInfo moving = null!, runtimeId = null!, simulation = null!, networks = null!, ground = null!, occupants = null!;
     MethodInfo update = null!, getAgent = null!, findPanels = null!, alive = null!;
+    MethodInfo tryOccupant = null!;
     object building = null!;
     bool enabled, patched, failed;
     public string? Error { get; private set; }
@@ -50,9 +52,48 @@ internal sealed class MoveBuildings
         alive = unity.GetMethod("op_Implicit", Flags, null, new[] { unity }, null)!;
         findPanels = unity.GetMethods(Flags).Single(m => m.Name == "FindObjectsOfType" && m.IsGenericMethodDefinition
             && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(bool)).MakeGenericMethod(panels);
+        var placer = Assembly.Load("Il2CppMFGSimClient").GetType("Il2CppMFGClient.BuildingPlacer", true)!;
+        var coordinate = Assembly.Load("UnityEngine.CoreModule").GetType("UnityEngine.Vector2Int", true)!;
+        moving = Property(placer, "agentInMotion");
+        runtimeId = Property(agent, "RuntimeId");
+        simulation = Property(sim.GetType("Il2CppMFGClient.GameSim", true)!, "Instance");
+        networks = Property(simulation.PropertyType, "NetworkLayerManager");
+        ground = Property(networks.PropertyType, "GroundLayer");
+        occupants = Property(ground.PropertyType, "OccupantGrid");
+        tryOccupant = occupants.PropertyType.GetMethod("TryGetValue", Flags, null,
+            new[] { coordinate, typeof(uint).MakeByRefType() }, null)
+            ?? throw new MissingMethodException("OccupantGrid.TryGetValue");
+        var occupied = placer.GetMethod("IsGridOccupied", Flags, null, new[] { coordinate }, null)
+            ?? throw new MissingMethodException(placer.FullName, "IsGridOccupied");
+        if (runtimeId.PropertyType != typeof(uint) || occupied.ReturnType != typeof(bool) || tryOccupant.ReturnType != typeof(bool))
+            throw new MissingMemberException("Unexpected building occupancy contract");
         HarmonyMethod Hook(string name) => new(typeof(MoveBuildings).GetMethod(name, Flags)!);
         harmony.Patch(update, prefix: Hook(nameof(BeforeButtons)), finalizer: Hook(nameof(AfterButtons)));
+        harmony.Patch(occupied, postfix: Hook(nameof(AfterOccupied)));
         patched = true;
+    }
+
+    static void AfterOccupied(object __instance, object __0, ref bool __result)
+    {
+        var self = current;
+        if (!__result || self == null || !self.enabled) return;
+        try
+        {
+            var agent = self.moving.GetValue(__instance);
+            if (agent == null || !Equals(self.agentType.GetValue(agent), self.building)) return;
+            var id = (uint)self.runtimeId.GetValue(agent)!;
+            if (id == 0) return;
+            var sim = self.simulation.GetValue(null);
+            if (sim == null) return;
+            var network = self.networks.GetValue(sim);
+            var layer = network == null ? null : self.ground.GetValue(network);
+            var grid = layer == null ? null : self.occupants.GetValue(layer);
+            if (grid == null) return;
+            object[] args = { __0, 0u };
+            // The early cell check omits self-exclusion; full footprint checks still run afterward.
+            if (self.tryOccupant.Invoke(grid, args) is true && (uint)args[1] == id) __result = false;
+        }
+        catch (Exception ex) { self.Fail(ex); }
     }
 
     static void BeforeButtons(object __0, out object? __state)

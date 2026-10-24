@@ -7,7 +7,7 @@ Das Toolkit ist experimentell. Sicherheitskorrekturen erfolgen auf `main`; älte
 ## Automatische Prüfungen
 
 - Windows-CI: Formatierung, Clippy, Tests, Release-Build.
-- CodeQL: Rust und GitHub-Actions-Workflows, einschließlich erweiterter Sicherheitsabfragen.
+- CodeQL: Rust, C# und GitHub-Actions-Workflows, einschließlich erweiterter Sicherheitsabfragen.
 - Dependency Review: neue verwundbare Abhängigkeiten blockieren Pull Requests.
 - GitHub: Dependency Graph, Dependabot-Warnungen und Sicherheitsupdates, Secret Scanning und Push Protection.
 - Renovate: alle Updates einschließlich Major-Versionen, Sicherheitskorrekturen, vorhandener Submodule und Lockfile-Wartung; Automerge erst nach erforderlichen grünen Prüfungen.

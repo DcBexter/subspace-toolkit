@@ -4,8 +4,6 @@ Mehr Überblick in **Star Trek: Outposts Unknown**. Für Windows, auf Deutsch un
 
 ## [⬇ Download & Releases](https://github.com/DcBexter/subspace-toolkit/releases)
 
-Noch in Entwicklung — bisher keine veröffentlichte Version.
-
 - Weiter herauszoomen, bis Abstand **1000**.
 - Kamerageschwindigkeit für Maus und WASD einstellen.
 - Ressourcen bei Mouseover in **Anfragen und Nachschub** hervorheben.
@@ -22,6 +20,6 @@ Noch in Entwicklung — bisher keine veröffentlichte Version.
 
 **Reset:** Gespeicherte Einstellungen entfernen, Mods ausschalten, Originalwerte wiederherstellen. Loader bleibt für weitere Nutzung installiert. Sprachauswahl oben rechts; Spielverbindung automatisch.
 
-Nachschub-Highlight und Shift-Bauen warten noch auf abschließende Spieltests. Unabhängiges Fan-Projekt.
+Getestet mit Spielbuild **273416**. Unabhängiges Fan-Projekt; nach Spielupdates kann Anpassung nötig sein.
 
 [Problem melden](https://github.com/DcBexter/subspace-toolkit/issues) · [Für Entwickler](https://github.com/DcBexter/subspace-toolkit/blob/main/docs/DEVELOPMENT.md)

@@ -11,7 +11,9 @@ public sealed class Engine
     readonly int pid = Environment.ProcessId;
     readonly string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SubspaceToolkit");
     readonly string[] names = { "maxZoomDistance", "directionalMoveSpeed", "panSpeed" };
-    PropertyInfo? instance, pointer, distance, minimum;
+    PropertyInfo? instance, pointer, distance, minimum, crewController, zoomPercent;
+    static Engine? active;
+    readonly HarmonyLib.Harmony harmony;
     PropertyInfo[] fields = Array.Empty<PropertyInfo>();
     MethodInfo? alive;
     object? camera;
@@ -33,11 +35,13 @@ public sealed class Engine
     {
         this.gameRoot = gameRoot;
         this.log = log;
+        this.harmony = harmony;
         if (!string.Equals(Path.GetFileName(Environment.ProcessPath), "StarTrekOutpostsUnknown.exe", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Wrong target process");
         Directory.CreateDirectory(directory);
         TakeOverPrevious();
         resourceHighlight = new ResourceHighlight(harmony);
+        active = this;
         AppDomain.CurrentDomain.SetData(ActiveEngineKey, this);
     }
 
@@ -182,6 +186,7 @@ public sealed class Engine
         fields = names.Select(name => Float(name, true)).ToArray();
         distance = Float("currentZoomDistance", false);
         minimum = Float("minZoomDistance", false);
+        zoomPercent = Float("currentZoomPercent", true);
         pointer = type.GetProperty("Pointer", InstanceFlags);
         if (pointer?.PropertyType != typeof(nint) || !pointer.CanRead)
             throw new MissingMemberException("Missing IL2CPP object identity");
@@ -192,8 +197,50 @@ public sealed class Engine
         var getter = type.GetProperty("Instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         if (getter?.PropertyType != type || !getter.CanRead || getter.GetIndexParameters().Length != 0)
             throw new MissingMemberException("Missing camera singleton");
+        var crewType = assembly.GetType("Il2CppMagicFuel.CrewWorldIcons.CrewWorldIconsCameraZoomEnable")
+            ?? assembly.GetType("MagicFuel.CrewWorldIcons.CrewWorldIconsCameraZoomEnable")
+            ?? throw new MissingMemberException("Missing crew camera visibility component");
+        crewController = crewType.GetProperty("controller", InstanceFlags);
+        if (crewController?.PropertyType != type || !crewController.CanRead)
+            throw new MissingMemberException("Missing crew camera reference");
+        var crewUpdate = crewType.GetMethod("Update", InstanceFlags, null, Type.EmptyTypes, null)
+            ?? throw new MissingMethodException("Missing crew visibility update");
+        HarmonyMethod Hook(string name) => new(typeof(Engine).GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)!);
+        harmony.Patch(crewUpdate, prefix: Hook(nameof(BeforeCrewZoom)), finalizer: Hook(nameof(AfterCrewZoom)));
         instance = getter;
         compatible = true;
+    }
+
+    static void BeforeCrewZoom(object __instance, out (PropertyInfo Field, object Camera, float Percent)? __state)
+    {
+        __state = null;
+        var engine = active;
+        if (engine == null || engine.stopped || engine.cameraFault || engine.original.Length == 0) return;
+        try
+        {
+            var controller = engine.crewController!.GetValue(__instance);
+            if (controller == null || (nint)engine.pointer!.GetValue(controller)! != engine.cameraPointer) return;
+            float distance = (float)engine.distance!.GetValue(controller)!;
+            float percent = (float)engine.zoomPercent!.GetValue(controller)!;
+            if (!float.IsFinite(distance) || !float.IsFinite(percent)) return;
+            __state = (engine.zoomPercent, controller, percent);
+            // Crew visibility uses the original range; other camera consumers retain their own percentage.
+            engine.zoomPercent.SetValue(controller, Math.Clamp((distance - engine.originalMinimum)
+                / (engine.original[0] - engine.originalMinimum), 0, 1));
+        }
+        catch (Exception ex) { engine.cameraFault = true; engine.error = ex.GetBaseException().Message; }
+    }
+
+    static void AfterCrewZoom((PropertyInfo Field, object Camera, float Percent)? __state)
+    {
+        if (__state is not { } state) return;
+        try { state.Field.SetValue(state.Camera, state.Percent); }
+        catch (Exception ex)
+        {
+            if (active == null) return;
+            active.cameraFault = true;
+            active.error = ex.GetBaseException().Message;
+        }
     }
 
     public readonly record struct Settings(float Zoom, float Speed, bool ResourceHighlight = false, bool RepeatBuild = false);

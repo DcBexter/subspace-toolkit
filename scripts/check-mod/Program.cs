@@ -149,6 +149,51 @@ highlightType.GetMethod("Clear", privateInstance)!.Invoke(highlight, null);
 Assert(border.Destroyed && !tile.Frame.Component.Destroyed && effects.Count == 0, "cleanup destroys only owned border clone");
 Console.WriteLine($"{checks} total checks including panel visibility ownership and tile border cleanup passed");
 
+var engineType = assembly.GetType("SubspaceToolkit.Engine")!;
+var engine = RuntimeHelpers.GetUninitializedObject(engineType);
+var beforeCrew = engineType.GetMethod("BeforeCrewZoom", BindingFlags.NonPublic | BindingFlags.Static)
+    ?? throw new Exception("Crew portraits still use the expanded zoom range");
+var afterCrew = engineType.GetMethod("AfterCrewZoom", BindingFlags.NonPublic | BindingFlags.Static)!;
+void CameraField(string name, object value) => engineType.GetField(name, privateInstance)!.SetValue(engine, value);
+var camera = new CrewCamera();
+var crew = new CrewVisibility { controller = camera };
+CameraField("cameraPointer", (nint)1);
+CameraField("pointer", typeof(CrewCamera).GetProperty(nameof(CrewCamera.Pointer))!);
+CameraField("distance", typeof(CrewCamera).GetProperty(nameof(CrewCamera.currentZoomDistance))!);
+CameraField("zoomPercent", typeof(CrewCamera).GetProperty(nameof(CrewCamera.currentZoomPercent))!);
+CameraField("crewController", typeof(CrewVisibility).GetProperty(nameof(CrewVisibility.controller))!);
+CameraField("original", new float[] { 300, 40, 120 });
+CameraField("originalMinimum", 35f);
+engineType.GetField("active", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, engine);
+foreach (float limit in new[] { 300f, 600f, 1000f })
+foreach (float distance in new[] { 259f, 261f, 280f, 900f }) {
+    camera.currentZoomDistance = distance;
+    float before = camera.currentZoomPercent = Math.Clamp((distance - 35) / (limit - 35), 0, 1);
+    object?[] hookArgs = { crew, null };
+    beforeCrew.Invoke(null, hookArgs);
+    Assert((camera.currentZoomPercent >= .85f) == (distance >= 260.25f), "portrait visibility preserves original physical distance");
+    afterCrew.Invoke(null, new[] { hookArgs[1] });
+    Assert(camera.currentZoomPercent == before, "crew callback restores camera percentage for other consumers");
+}
+CameraField("stopped", true);
+camera.currentZoomPercent = .2f;
+object?[] stoppedArgs = { crew, null };
+beforeCrew.Invoke(null, stoppedArgs);
+Assert(camera.currentZoomPercent == .2f && stoppedArgs[1] == null, "suspended engine cannot affect crew visibility");
+CameraField("stopped", false);
+crew.controller = new CrewCamera { Pointer = 2, currentZoomPercent = .3f };
+beforeCrew.Invoke(null, stoppedArgs);
+Assert(crew.controller.currentZoomPercent == .3f && stoppedArgs[1] == null, "unowned camera remains untouched");
+Console.WriteLine($"{checks} total checks including crew visibility and camera isolation passed");
+
+public class CrewCamera
+{
+    public nint Pointer { get; set; } = 1;
+    public float currentZoomDistance { get; set; }
+    public float currentZoomPercent { get; set; }
+}
+public class CrewVisibility { public CrewCamera controller { get; set; } = new(); }
+
 public class InventoryNode
 {
     public bool enabled { get; set; } = true;

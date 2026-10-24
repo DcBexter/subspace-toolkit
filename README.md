@@ -1,23 +1,27 @@
 # 🖖 Subspace Toolkit
 
-Mehr Überblick in **Star Trek: Outposts Unknown**: weiter herauszoomen, bis Kameraabstand **1000**. Für Windows, auf Deutsch und Englisch.
+Mehr Überblick in **Star Trek: Outposts Unknown**. Für Windows, auf Deutsch und Englisch.
 
 ## [⬇ Download & Releases](https://github.com/DcBexter/subspace-toolkit/releases)
 
 Noch in Entwicklung — bisher keine veröffentlichte Version.
 
+- Weiter herauszoomen, bis Abstand **1000**.
+- Kamerageschwindigkeit für Maus und WASD einstellen.
+- Ressourcen bei Mouseover in **Anfragen und Nachschub** hervorheben.
+- Mit **Shift** mehrere gleiche Gebäude nacheinander platzieren.
+
 ## So funktioniert’s
 
-1. ZIP entpacken und `subspace-toolkit.exe` starten.
-2. Spiel starten und Spielstand laden. Toolkit verbindet sich automatisch.
-3. Gewünschten Zoom einstellen und wie gewohnt mit dem Mausrad herauszoomen.
+1. ZIP vollständig entpacken, `subspace-toolkit.exe` starten.
+2. Spiel starten und Einstellungen wählen. Verbindung erfolgt automatisch.
 
-**Dauerhaft nutzen:** Spiel speichern und schließen, Toolkit offen lassen. **Permanent speichern** klicken. Danach funktioniert der Mod auch ohne laufendes Toolkit.
+**Trainer:** Funktioniert auch ohne installierte Mod im bereits laufenden Spiel. Toolkit geöffnet lassen; beim Schließen gelten wieder gespeicherte Werte, sonst Originalwerte. Erste Verbindung braucht etwas länger.
 
-**Nur beim Spielen nutzen:** Toolkit geöffnet lassen. Beim Schließen wird ursprüngliches Zoomlimit wiederhergestellt.
+**Permanent:** Spiel vor erster Installation schließen, **Permanent speichern** drücken. Danach wirken Einstellungen auch ohne Toolkit. Spielordner bei Bedarf über **Spielordner…** auswählen.
 
-**Zurück zum Original:** **Mod & Einstellungen zurücksetzen** klicken. Bei dauerhaft installiertem Mod vorher Spiel schließen. Auch vor einem Spielupdate zurücksetzen.
+**Reset:** Gespeicherte Einstellungen entfernen, Mods ausschalten, Originalwerte wiederherstellen. Loader bleibt für weitere Nutzung installiert. Sprachauswahl oben rechts; Spielverbindung automatisch.
 
-Experimentelle Version; abschließender Spieltest steht noch aus. Unabhängiges Fan-Projekt.
+Nachschub-Highlight und Shift-Bauen warten noch auf abschließende Spieltests. Unabhängiges Fan-Projekt.
 
-[Problem melden](https://github.com/DcBexter/subspace-toolkit/issues) · [Für Entwickler](docs/DEVELOPMENT.md)
+[Problem melden](https://github.com/DcBexter/subspace-toolkit/issues) · [Für Entwickler](https://github.com/DcBexter/subspace-toolkit/blob/main/docs/DEVELOPMENT.md)

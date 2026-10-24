@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <AssemblyName>SubspaceLive</AssemblyName>
+    <Version>0.1.0</Version>
+    <LoaderDirectory Condition="'$(LoaderDirectory)' == ''">../dist/SubspaceToolkit/payload/MelonLoader/net6</LoaderDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Generator/**/*.cs;Checks/**/*.cs" />
+    <Compile Include="../mod/Engine.cs;../mod/ResourceHighlight.cs;../mod/RepeatBuild.cs" />
+    <Reference Include="0Harmony"><HintPath>$(LoaderDirectory)/0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(LoaderDirectory)/Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Common"><HintPath>$(LoaderDirectory)/Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.HarmonySupport"><HintPath>$(LoaderDirectory)/Il2CppInterop.HarmonySupport.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="MonoMod.RuntimeDetour"><HintPath>$(LoaderDirectory)/MonoMod.RuntimeDetour.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

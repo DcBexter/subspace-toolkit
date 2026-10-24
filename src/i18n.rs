@@ -10,7 +10,7 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    pub fn system() -> Self {
+    pub fn selected(language: Option<&str>) -> Self {
         let mut locale = [0u16; 85];
         let length = unsafe {
             LCIDToLocaleName(
@@ -30,7 +30,29 @@ impl Catalog {
             .as_deref()
             .and_then(Path::parent)
             .map(|path| path.join("locales"));
-        Self::load(&locale, directory.as_deref())
+        Self::load(language.unwrap_or(&locale), directory.as_deref())
+    }
+
+    pub fn languages() -> Vec<String> {
+        let mut languages = vec!["de".to_owned(), "en".to_owned()];
+        if let Some(files) = std::env::current_exe()
+            .ok()
+            .and_then(|p| std::fs::read_dir(p.parent()?.join("locales")).ok())
+        {
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().is_some_and(|e| e == "json")
+                    && let Some(code) = path.file_stem().and_then(|s| s.to_str())
+                    && !code.is_empty()
+                    && code.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-')
+                {
+                    languages.push(code.to_owned());
+                }
+            }
+        }
+        languages.sort();
+        languages.dedup();
+        languages
     }
 
     fn load(locale: &str, directory: Option<&Path>) -> Self {
@@ -90,15 +112,9 @@ mod tests {
 
     #[test]
     fn system_language_selection_and_english_fallback() {
-        assert_eq!(
-            Catalog::load("de-DE", None).text("apply"),
-            "Für diese Sitzung anwenden"
-        );
+        assert_eq!(Catalog::load("de-DE", None).text("apply"), "Anwenden");
         for locale in ["en-US", "es-ES", "../de", ""] {
-            assert_eq!(
-                Catalog::load(locale, None).text("apply"),
-                "Apply for this session"
-            );
+            assert_eq!(Catalog::load(locale, None).text("apply"), "Apply");
         }
         let english: Messages = serde_json::from_str(ENGLISH).unwrap();
         let german: Messages = serde_json::from_str(GERMAN).unwrap();
@@ -132,18 +148,18 @@ mod tests {
                     ("original", "300".into())
                 ]
             ),
-            "Distance: 300 / 1000 · Original: 300"
+            "In game: 1000 · Distance: 300"
         );
         std::fs::write(&french, b"invalid json").unwrap();
         assert_eq!(
             Catalog::load("fr-FR", Some(&directory)).text("apply"),
-            "Apply for this session"
+            "Apply"
         );
         let german = directory.join("de.json");
         std::fs::write(&german, b"invalid json").unwrap();
         assert_eq!(
             Catalog::load("de-DE", Some(&directory)).text("apply"),
-            "Für diese Sitzung anwenden"
+            "Anwenden"
         );
         std::fs::remove_file(french).unwrap();
         std::fs::remove_file(german).unwrap();

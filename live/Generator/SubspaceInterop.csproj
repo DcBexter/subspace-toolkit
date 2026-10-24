@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SubspaceInterop</AssemblyName>
+    <LoaderDirectory Condition="'$(LoaderDirectory)' == ''">$(MSBuildThisFileDirectory)../../dist/SubspaceToolkit/payload/MelonLoader/net6</LoaderDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Il2CppInterop.Generator"><HintPath>$(LoaderDirectory)/Il2CppInterop.Generator.dll</HintPath></Reference>
+    <Reference Include="Il2CppInterop.Common"><HintPath>$(LoaderDirectory)/Il2CppInterop.Common.dll</HintPath></Reference>
+    <Reference Include="AsmResolver.DotNet"><HintPath>$(LoaderDirectory)/AsmResolver.DotNet.dll</HintPath></Reference>
+    <Reference Include="AsmResolver"><HintPath>$(LoaderDirectory)/AsmResolver.dll</HintPath></Reference>
+    <Reference Include="AsmResolver.PE.File"><HintPath>$(LoaderDirectory)/AsmResolver.PE.File.dll</HintPath></Reference>
+    <Reference Include="AsmResolver.PE"><HintPath>$(LoaderDirectory)/AsmResolver.PE.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SubspaceToolkit</AssemblyName>
+    <Version>0.1.0</Version>
+    <GameDirectory Condition="'$(GameDirectory)' == ''">$(OUTPOSTS_GAME_DIR)</GameDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>$(GameDirectory)\MelonLoader\net6\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MelonLoader">
+      <HintPath>$(GameDirectory)\MelonLoader\net6\MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="CheckLoaderReference" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(GameDirectory)\MelonLoader\net6\MelonLoader.dll')" Text="Set GameDirectory or OUTPOSTS_GAME_DIR to the game folder containing MelonLoader 0.7.3." />
+  </Target>
+</Project>

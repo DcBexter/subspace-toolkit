@@ -29,6 +29,9 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.426'
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -37,14 +40,34 @@ jobs:
         run: cargo test --locked --bin subspace-toolkit
       - name: Build Windows application
         run: cargo build --locked --release --bin subspace-toolkit
+      - name: Build loader payload and mod without game files
+        run: ./scripts/prepare-loader.ps1
+      - name: Build independent live trainer runtime
+        run: ./scripts/prepare-live.ps1
+      - name: Check live hook activation and restoration
+        run: |
+          cargo build --manifest-path live/host/Cargo.toml --locked --example fixture --target-dir target/live-host
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet build live/Checks -c Release --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./dist/SubspaceToolkit/live/runtime/dotnet.exe live/Checks/bin/Release/net6.0/Checks.dll dist/SubspaceToolkit/live target/live-host/debug/examples/fixture.dll
+      - name: Check mod settings and file conflict recovery
+        run: dotnet run --project scripts/check-mod -c Release
+      - name: Check packaged installer in temporary folder
+        run: |
+          $env:SUBSPACE_TEST_PAYLOAD = (Resolve-Path dist/SubspaceToolkit/payload).Path
+          cargo test --locked --bin subspace-toolkit release_payload_installs -- --ignored
       - name: Package portable application
         run: |
           New-Item -ItemType Directory -Path dist/SubspaceToolkit/locales -Force | Out-Null
           Copy-Item target/release/subspace-toolkit.exe dist/SubspaceToolkit/
           Copy-Item locales/*.json dist/SubspaceToolkit/locales/
           Copy-Item README.md dist/SubspaceToolkit/
-          $artifactHash = (Get-FileHash dist/SubspaceToolkit/subspace-toolkit.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$artifactHash  subspace-toolkit.exe" | Set-Content dist/SubspaceToolkit/SHA256SUMS.txt -Encoding utf8
+          $package = (Resolve-Path dist/SubspaceToolkit).Path
+          Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object Name -ne SHA256SUMS.txt | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/')
+            "{0}  {1}" -f (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $relative
+          } | Set-Content dist/SubspaceToolkit/SHA256SUMS.txt -Encoding utf8
       - name: Upload portable application
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -63,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [rust, actions]
+        language: [rust, actions, csharp]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

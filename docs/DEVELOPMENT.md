@@ -34,6 +34,6 @@ Windows-Anzeigesprache entscheidet; fehlende Sprache oder Schlüssel fallen auf 
 
 ## Automatisierung
 
-Ein Workflow enthält Windows-Build, Tests, Clippy, CodeQL für Rust/Actions, RustSec-Audit und Dependency Review. Sicherheitsscans laufen zusätzlich täglich. Renovate aktualisiert Crates, Rust-Toolchain, Actions, Auditwerkzeug und Lockfile, einschließlich Major-Versionen. Automerge benötigt aktuelle Branches und grüne Pflichtprüfungen; Sicherheitsdetails siehe [SECURITY.md](../SECURITY.md).
+Ein Workflow enthält Windows-Build, Tests, Clippy, CodeQL für Rust/Actions, RustSec-Audit und Dependency Review. Sicherheitsscans laufen zusätzlich täglich, Windows-Prüfungen zusätzlich montags. Renovate aktualisiert Crates, Rust-Toolchain, Actions, Auditwerkzeug und Lockfile. Alle Updates einschließlich Major-Versionen, Sicherheitskorrekturen und vorhandener Submodule dürfen nach aktuellen Branches und grünen Pflichtprüfungen automatisch mergen. Dependabot-PRs erhalten ebenfalls natives Auto-Merge, ohne ihren Code im privilegierten Workflow auszuführen. Produkt-PRs bleiben ausgeschlossen. Sicherheitsdetails siehe [SECURITY.md](../SECURITY.md).
 
 Spielpakete, dekompilierte Quellen und Backups gehören nicht ins Repository. Spieltest nach permanenter Installation steht noch aus.

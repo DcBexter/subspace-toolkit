@@ -10,6 +10,8 @@ Das Toolkit ist experimentell. Sicherheitskorrekturen erfolgen auf `main`; älte
 - CodeQL: Rust und GitHub-Actions-Workflows, einschließlich erweiterter Sicherheitsabfragen.
 - Dependency Review: neue verwundbare Abhängigkeiten blockieren Pull Requests.
 - GitHub: Dependency Graph, Dependabot-Warnungen und Sicherheitsupdates, Secret Scanning und Push Protection.
-- Renovate: Updates einschließlich Major-Versionen und Lockfile-Wartung, Automerge erst nach erforderlichen grünen Prüfungen.
+- Renovate: alle Updates einschließlich Major-Versionen, Sicherheitskorrekturen, vorhandener Submodule und Lockfile-Wartung; Automerge erst nach erforderlichen grünen Prüfungen.
+
+Dependabot-PRs erhalten ebenfalls natives Auto-Merge, ohne ihren Code im privilegierten Workflow auszuführen. Produkt-PRs werden davon nicht erfasst.
 
 Grüne Prüfungen ersetzen keinen Spieltest. Insbesondere Major-Updates können Verhalten verändern, das automatisierte Tests nicht abdecken.

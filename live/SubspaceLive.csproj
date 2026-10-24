@@ -6,12 +6,12 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <AssemblyName>SubspaceLive</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <LoaderDirectory Condition="'$(LoaderDirectory)' == ''">../dist/SubspaceToolkit/payload/MelonLoader/net6</LoaderDirectory>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="Generator/**/*.cs;Checks/**/*.cs" />
-    <Compile Include="../mod/Engine.cs;../mod/ResourceHighlight.cs;../mod/RepeatBuild.cs" />
+    <Compile Include="../mod/Engine.cs;../mod/ResourceHighlight.cs;../mod/RepeatBuild.cs;../mod/MoveBuildings.cs" />
     <Reference Include="0Harmony"><HintPath>$(LoaderDirectory)/0Harmony.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Runtime"><HintPath>$(LoaderDirectory)/Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Common"><HintPath>$(LoaderDirectory)/Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>

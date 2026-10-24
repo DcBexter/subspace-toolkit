@@ -166,7 +166,7 @@ public static class Bootstrap
             try {
                 string status = Path.Combine(Path.GetDirectoryName(LogPath)!, $"status-{Environment.ProcessId}.json");
                 string temp = status + ".bootstrap.tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(new { schema = 1, bridge_version = 2, pid = Environment.ProcessId, game_dir = gameRoot,
+                File.WriteAllText(temp, JsonSerializer.Serialize(new { schema = 1, bridge_version = 3, pid = Environment.ProcessId, game_dir = gameRoot,
                     updated_utc_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), compatible = false, camera_ready = false, error = message }));
                 File.Move(temp, status, true);
             } catch (Exception) { }

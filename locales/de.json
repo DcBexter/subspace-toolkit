@@ -55,6 +55,7 @@
   "mods_tab": "Mods",
   "resource_highlight": "Ressourcen bei Mouseover markieren",
   "repeat_build": "Mit Shift mehrfach bauen",
+  "move_buildings": "Alle Gebäude bewegen",
   "feature_error": "Mod nicht verfügbar: {detail}",
   "error.payload_invalid": "Mod-Paket beschädigt: {detail}. Erneut herunterladen und entpacken.",
   "error.payload_conflict": "Abweichende installierte Datei: {detail}. Vorhandene Dateien bleiben unverändert.",

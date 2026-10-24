@@ -58,6 +58,12 @@ jobs:
         run: |
           $env:SUBSPACE_TEST_PAYLOAD = (Resolve-Path dist/SubspaceToolkit/payload).Path
           cargo test --locked --bin subspace-toolkit release_payload_installs -- --ignored
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $previous = 'dist/downloads/SubspaceToolkit-0.1.0-windows-x64.zip'
+          if ((Get-FileHash $previous).Hash.ToLowerInvariant() -ne '52d3624c4e9322296c2f3517161b8b14d1e8a0038c799bedb65d0af73b3a9e34') { throw 'Previous release checksum mismatch' }
+          Expand-Archive $previous dist/previous
+          $env:SUBSPACE_TEST_OLD_MOD = (Resolve-Path dist/previous/payload/Mods/SubspaceToolkit.dll).Path
+          cargo test --locked --bin subspace-toolkit published_0_1_0_mod_upgrades -- --ignored
       - name: Package portable application
         run: |
           New-Item -ItemType Directory -Path dist/SubspaceToolkit/locales -Force | Out-Null

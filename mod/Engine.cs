@@ -24,6 +24,7 @@ public sealed class Engine
     bool compatible, stopped, cameraFault;
     string? error, lastLoggedError;
     ResourceHighlight? resourceHighlight;
+    MoveBuildings? moveBuildings;
     readonly string gameRoot;
     readonly Action<string> log;
     public const string ActiveEngineKey = "SubspaceToolkit.ActiveEngine";
@@ -41,6 +42,7 @@ public sealed class Engine
         Directory.CreateDirectory(directory);
         TakeOverPrevious();
         resourceHighlight = new ResourceHighlight(harmony);
+        moveBuildings = new MoveBuildings(harmony);
         active = this;
         AppDomain.CurrentDomain.SetData(ActiveEngineKey, this);
     }
@@ -89,6 +91,7 @@ public sealed class Engine
     {
         if (!Restore()) return false;
         resourceHighlight?.Stop();
+        moveBuildings?.Stop();
         RepeatBuild.Stop();
         stopped = true;
         return true;
@@ -104,6 +107,7 @@ public sealed class Engine
             var desired = SelectSettings(LivePath, PermanentPath, now);
             resourceHighlight!.Tick(desired?.ResourceHighlight ?? false);
             RepeatBuild.Configure(desired?.RepeatBuild ?? false);
+            moveBuildings!.Tick(desired?.MoveBuildings ?? false);
             if (instance == null) Bind();
             var candidate = instance!.GetValue(null);
             if (candidate == null || !(bool)alive!.Invoke(null, new[] { candidate })!)
@@ -153,6 +157,7 @@ public sealed class Engine
             if (ex is FormatException)
             {
                 resourceHighlight?.Stop();
+                moveBuildings?.Stop();
                 RepeatBuild.Stop();
                 try { Restore(); } catch (Exception) { cameraFault = true; }
             }
@@ -243,7 +248,7 @@ public sealed class Engine
         }
     }
 
-    public readonly record struct Settings(float Zoom, float Speed, bool ResourceHighlight = false, bool RepeatBuild = false);
+    public readonly record struct Settings(float Zoom, float Speed, bool ResourceHighlight = false, bool RepeatBuild = false, bool MoveBuildings = false);
 
     public static Settings? ParseSettings(JsonElement root, long now, bool temporary)
     {
@@ -262,7 +267,7 @@ public sealed class Engine
                 return null;
         }
         bool Flag(string key) => root.TryGetProperty(key, out var value) && value.GetBoolean();
-        return new(zoom, speed, Flag("resource_highlight"), Flag("repeat_build"));
+        return new(zoom, speed, Flag("resource_highlight"), Flag("repeat_build"), Flag("move_buildings"));
     }
 
     static Settings? SelectSettings(string live, string permanent, long now)
@@ -295,14 +300,14 @@ public sealed class Engine
         if (!float.IsFinite(current)) throw new InvalidOperationException("Invalid camera distance");
         var status = new
         {
-            schema = 1, pid, game_dir = gameRoot, bridge_version = 2, updated_utc_ms = now,
+            schema = 1, pid, game_dir = gameRoot, bridge_version = 3, updated_utc_ms = now,
             compatible, camera_ready = ready && !cameraFault,
             maximum = ready ? applied[0] : 0, current,
             minimum = ready ? originalMinimum : 0,
             original = ready ? original[0] : 0,
             speed = ready ? applied[1] / original[1] : 1,
             error,
-            feature_error = resourceHighlight?.Error ?? RepeatBuild.Error
+            feature_error = resourceHighlight?.Error ?? RepeatBuild.Error ?? moveBuildings?.Error
         };
         string temp = StatusPath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(status));
@@ -325,6 +330,7 @@ public sealed class Engine
         // Unity may already have destroyed camera objects during shutdown.
         stopped = true;
         resourceHighlight?.Abandon();
+        moveBuildings?.Abandon();
         RepeatBuild.Stop();
         if (ReferenceEquals(AppDomain.CurrentDomain.GetData(ActiveEngineKey), this))
             try { File.Delete(StatusPath); } catch (IOException) { }

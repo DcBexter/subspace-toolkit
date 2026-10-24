@@ -1,7 +1,7 @@
 using MelonLoader;
 using MelonLoader.Utils;
 
-[assembly: MelonInfo(typeof(SubspaceToolkit.CameraMod), "Subspace Toolkit", "0.1.0", "DcBexter")]
+[assembly: MelonInfo(typeof(SubspaceToolkit.CameraMod), "Subspace Toolkit", "0.1.1", "DcBexter")]
 namespace SubspaceToolkit;
 
 public sealed class CameraMod : MelonMod

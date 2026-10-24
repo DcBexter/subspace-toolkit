@@ -10,7 +10,72 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_READ};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_READ, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
+
+const MOD_0_1_0_SHA256: &str = "8fbb896501d13f50ac04a48274d560113cce0b948620fd45e959ae435b19b194";
+
+fn published_mod(name: &str, hash: &str) -> bool {
+    name == "Mods/SubspaceToolkit.dll" && hash == MOD_0_1_0_SHA256
+}
+
+fn move_without_replace(source: &Path, target: &Path) -> Result<(), GameError> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>()
+    };
+    if unsafe {
+        MoveFileExW(
+            wide(source).as_ptr(),
+            wide(target).as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn upgrade_published_mod(dir: &Path, target: &Path, data: &[u8]) -> Result<(), GameError> {
+    if digest(target)? != MOD_0_1_0_SHA256 {
+        return Err(GameError::detail(
+            "error.payload_conflict",
+            "Mods/SubspaceToolkit.dll",
+        ));
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io)?
+        .as_nanos();
+    let backup = confined(
+        dir,
+        &format!("UserData/SubspaceToolkit-0.1.0-{stamp}.dll.bak"),
+    )?;
+    fs::create_dir_all(backup.parent().ok_or("error.invalid_game_path")?).map_err(io)?;
+    // Move first, then verify the captured file; concurrent changes cannot be overwritten.
+    move_without_replace(target, &backup)?;
+    let replace = (|| {
+        if digest(&backup)? != MOD_0_1_0_SHA256 {
+            return Err(GameError::detail(
+                "error.payload_conflict",
+                "Mods/SubspaceToolkit.dll",
+            ));
+        }
+        atomic_create(target, data).map_err(io)
+    })();
+    if replace.is_err() && move_without_replace(&backup, target).is_err() {
+        return Err(io(format!(
+            "Mod update failed; original retained at {}",
+            backup.display()
+        )));
+    }
+    replace
+}
 
 #[derive(Debug)]
 pub struct InstalledMod {
@@ -69,6 +134,7 @@ fn read_config(dir: &Path) -> Result<Option<InstalledMod>, GameError> {
                 "movement_speed",
                 "resource_highlight",
                 "repeat_build",
+                "move_buildings",
             ]
             .contains(&key.as_str())
         }) || value["schema"].as_u64()? != 1
@@ -131,7 +197,7 @@ fn save_config(
     // Unknown contents belong to someone else; never overwrite them.
     read_config(dir)?;
     let bytes = serde_json::to_vec_pretty(
-        &serde_json::json!({"schema":1,"zoom_limit":limit,"movement_speed":movement_speed,"resource_highlight":features.resource_highlight,"repeat_build":features.repeat_build}),
+        &serde_json::json!({"schema":1,"zoom_limit":limit,"movement_speed":movement_speed,"resource_highlight":features.resource_highlight,"repeat_build":features.repeat_build,"move_buildings":features.move_buildings}),
     )
     .map_err(io)?;
     atomic_write(&config_path(dir)?, &bytes).map_err(io)
@@ -288,9 +354,9 @@ fn install_payload(
             return Err("error.permanent_manifest".into());
         }
     }
-    // Never activate a partially copied loader. Existing files are never overwritten.
+    // Never activate a partially copied loader; only our known published mod may be upgraded.
     files.sort_by_key(|(name, _, _, _)| *name == "version.dll");
-    let mut missing = Vec::new();
+    let mut pending = Vec::new();
     for (index, (name, expected, source, target)) in files.iter().enumerate() {
         // Existing installations can save tiny settings files while the game runs.
         if !closed
@@ -307,23 +373,30 @@ fn install_payload(
             return Err(GameError::detail("error.payload_invalid", name));
         }
         if target.try_exists().map_err(io)? {
+            let current = digest(target)?;
             let matches = if *name == "UserData/Loader.cfg" {
                 loader_config_compatible(target)?
             } else {
-                digest(target)? == expected.to_ascii_lowercase()
+                current == expected.to_ascii_lowercase()
             };
             if !matches {
-                return Err(GameError::detail("error.payload_conflict", name));
+                if !published_mod(name, &current) {
+                    return Err(GameError::detail("error.payload_conflict", name));
+                }
+                if !closed {
+                    return Err("error.game_must_close".into());
+                }
+                pending.push((name, expected, source, target, true));
             }
         } else {
             if !closed {
                 return Err("error.game_must_close".into());
             }
-            missing.push((name, expected, source, target));
+            pending.push((name, expected, source, target, false));
         }
         progress(index * 50 / files.len());
     }
-    for (index, (name, expected, source, target)) in missing.iter().enumerate() {
+    for (index, (name, expected, source, target, upgrade)) in pending.iter().enumerate() {
         fs::create_dir_all(target.parent().ok_or("error.invalid_game_path")?).map_err(io)?;
         confined(dir, name)?;
         let input = File::options()
@@ -345,8 +418,12 @@ fn install_payload(
         {
             return Err("error.payload_invalid".into());
         }
-        atomic_create(target, &data).map_err(io)?;
-        progress(50 + (index + 1) * 49 / missing.len());
+        if *upgrade {
+            upgrade_published_mod(dir, target, &data)?;
+        } else {
+            atomic_create(target, &data).map_err(io)?;
+        }
+        progress(50 + (index + 1) * 49 / pending.len());
     }
     Ok(())
 }
@@ -374,6 +451,101 @@ fn reset_settings(dir: Option<&Path>, preferences: &Path) -> Result<(), GameErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn published_mod_upgrade_policy_and_moves_preserve_foreign_files() {
+        assert!(published_mod("Mods/SubspaceToolkit.dll", MOD_0_1_0_SHA256));
+        assert!(!published_mod(
+            "MelonLoader/net6/Il2CppInterop.Runtime.dll",
+            MOD_0_1_0_SHA256
+        ));
+        assert!(!published_mod("Mods/SubspaceToolkit.dll", &"0".repeat(64)));
+        let root = std::env::temp_dir().join(format!(
+            "subspace-upgrade-policy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.dll");
+        let target = root.join("target.dll");
+        fs::write(&source, b"published candidate").unwrap();
+        fs::write(&target, b"foreign").unwrap();
+        assert!(move_without_replace(&source, &target).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"published candidate");
+        assert_eq!(fs::read(&target).unwrap(), b"foreign");
+        assert!(upgrade_published_mod(&root, &target, b"replacement").is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"foreign");
+        assert!(!root.join("UserData").exists());
+        assert!(root.starts_with(std::env::temp_dir()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires SUBSPACE_TEST_PAYLOAD and SUBSPACE_TEST_OLD_MOD; temporary fixture only"]
+    fn published_0_1_0_mod_upgrades_only_closed_after_validation_and_keeps_backup() {
+        let payload = PathBuf::from(std::env::var_os("SUBSPACE_TEST_PAYLOAD").unwrap());
+        let old_path = PathBuf::from(std::env::var_os("SUBSPACE_TEST_OLD_MOD").unwrap());
+        let old = fs::read(&old_path).unwrap();
+        assert_eq!(
+            Sha256::digest(&old)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+            MOD_0_1_0_SHA256
+        );
+        let root = std::env::temp_dir().join(format!(
+            "subspace-upgrade-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let game = fs::canonicalize(&root).unwrap();
+        install_payload(
+            old_path.parent().unwrap().parent().unwrap(),
+            &game,
+            true,
+            &|_| {},
+        )
+        .unwrap();
+        let target = game.join("Mods/SubspaceToolkit.dll");
+        let next = fs::read(payload.join("Mods/SubspaceToolkit.dll")).unwrap();
+        assert_ne!(next, old, "fixture must contain a new mod");
+        save_config(&game, 700.0, 2.0, Features::default()).unwrap();
+        let saved = fs::read(config_path(&game).unwrap()).unwrap();
+        assert_eq!(
+            install_payload(&payload, &game, false, &|_| {})
+                .unwrap_err()
+                .key,
+            "error.game_must_close"
+        );
+        assert_eq!(fs::read(&target).unwrap(), old);
+        let proxy = game.join("version.dll");
+        let proxy_bytes = fs::read(&proxy).unwrap();
+        fs::write(&proxy, b"foreign proxy").unwrap();
+        assert!(install_payload(&payload, &game, true, &|_| {}).is_err());
+        assert_eq!(fs::read(&target).unwrap(), old);
+        fs::write(&proxy, proxy_bytes).unwrap();
+        install_payload(&payload, &game, true, &|_| {}).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), next);
+        let backups: Vec<_> = fs::read_dir(game.join("UserData"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "bak"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), old);
+        assert_eq!(fs::read(config_path(&game).unwrap()).unwrap(), saved);
+        install_payload(&payload, &game, false, &|_| {}).unwrap();
+        assert_eq!(fs::read_dir(game.join("UserData")).unwrap().count(), 3);
+        assert!(root.starts_with(std::env::temp_dir()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     #[ignore = "requires built release payload; installs only into a temporary fixture"]
     fn release_payload_installs_in_temporary_folder_and_can_save_while_running() {
@@ -403,12 +575,14 @@ mod tests {
             Features {
                 resource_highlight: true,
                 repeat_build: true,
+                move_buildings: true,
             },
         )
         .unwrap();
         let installed = read_config(&dir).unwrap().unwrap();
         assert_eq!((installed.limit, installed.movement_speed), (1000.0, 3.0));
         assert!(installed.features.resource_highlight && installed.features.repeat_build);
+        assert!(installed.features.move_buildings);
         remove_config(&dir).unwrap();
         assert!(dir.join("Mods/SubspaceToolkit.dll").exists());
         assert!(read_config(&dir).unwrap().is_none());
@@ -568,11 +742,18 @@ mod tests {
         let features = Features {
             resource_highlight: true,
             repeat_build: true,
+            move_buildings: true,
         };
         save_config(&dir, 1000.0, 3.0, features).unwrap();
         let saved = read_config(&dir).unwrap().unwrap();
         assert_eq!((saved.limit, saved.movement_speed), (1000.0, 3.0));
         assert_eq!(saved.features, features);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&fs::read(config_path(&dir).unwrap()).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("move_buildings");
+        fs::write(config_path(&dir).unwrap(), legacy.to_string()).unwrap();
+        assert!(!read_config(&dir).unwrap().unwrap().features.move_buildings);
+        save_config(&dir, 1000.0, 3.0, features).unwrap();
         assert!(fs::metadata(config_path(&dir).unwrap()).unwrap().len() < 200);
         let before = fs::read(config_path(&dir).unwrap()).unwrap();
         for (limit, speed) in [
@@ -603,6 +784,7 @@ mod tests {
             serde_json::json!({"schema":1,"zoom_limit":1001,"movement_speed":1}),
             serde_json::json!({"schema":1,"zoom_limit":500,"movement_speed":0}),
             serde_json::json!({"schema":1,"zoom_limit":500,"movement_speed":1,"foreign":true}),
+            serde_json::json!({"schema":1,"zoom_limit":500,"movement_speed":1,"move_buildings":"true"}),
         ] {
             fs::write(config_path(&dir).unwrap(), value.to_string()).unwrap();
             assert!(read_config(&dir).is_err());

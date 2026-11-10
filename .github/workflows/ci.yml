@@ -125,7 +125,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install RustSec auditor
-        run: cargo install cargo-audit --locked --version 0.22.2
+        run: cargo install cargo-audit --locked --version 0.23.0
       - name: Check locked dependencies
         run: cargo audit
 
